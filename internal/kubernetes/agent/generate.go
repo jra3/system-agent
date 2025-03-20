@@ -13,37 +13,19 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 func (i *indexer) generate(obj object) (rsrc *resourcev1.Resource, rels []*resourcev1.Relationship, err error) {
-	clusterRsrc, err := i.store.GetResource(resource.KubeCluster)
-	if err != nil {
-		err = fmt.Errorf("failed to get cluster resource, will retry: %w", err)
-		return nil, nil, errors.NewRetryable(err.Error())
-	}
-	clusterName := clusterRsrc.GetMetadata().GetName()
-
 	gvk := obj.GetObjectKind().GroupVersionKind()
-	mapping, err := i.mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get REST mapping for %s: %w", gvk.String(), err)
 	}
-	k8sRsrc := k8sResource{
-		gvr: mapping.Resource,
-		obj: obj,
-	}
-
-	var owners []k8sResource
+	var owners []object
 	if obj.GetOwnerReferences() != nil {
-		owners = make([]k8sResource, len(obj.GetOwnerReferences()))
+		owners = make([]object, len(obj.GetOwnerReferences()))
 		for idx, ownerRef := range obj.GetOwnerReferences() {
 			ownerGvk := schema.FromAPIVersionAndKind(ownerRef.APIVersion, ownerRef.Kind)
-			ownerMapping, err := i.mapper.RESTMapping(ownerGvk.GroupKind(), ownerGvk.Version)
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to get REST mapping for %s: %w", ownerGvk.String(), err)
-			}
 			ownerRuntimeObj, err := scheme.Get().New(ownerGvk)
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to create runtime object for %s: %w", ownerGvk.String(), err)
@@ -55,34 +37,31 @@ func (i *indexer) generate(obj object) (rsrc *resourcev1.Resource, rels []*resou
 			ownerObj.SetName(ownerRef.Name)
 			ownerObj.SetNamespace(obj.GetNamespace())
 			ownerObj.SetUID(ownerRef.UID)
-			owners[idx] = k8sResource{
-				gvr: ownerMapping.Resource,
-				obj: ownerObj,
-			}
+			owners[idx] = ownerObj
 		}
 	}
 
 	switch obj := obj.(type) {
 	case *corev1.Pod:
-		rsrc, rels, err = genPod(i.store, clusterName, k8sRsrc, owners...)
+		rsrc, rels, err = genPod(i.store, i.clusterName, obj, owners...)
 	case *corev1.Node:
-		rsrc, rels, err = genNode(clusterName, k8sRsrc, owners...)
+		rsrc, rels, err = genNode(i.clusterName, obj, owners...)
 	case *corev1.PersistentVolume:
-		rsrc, rels, err = genPersistentVolume(clusterName, k8sRsrc, owners...)
+		rsrc, rels, err = genPersistentVolume(i.clusterName, obj, owners...)
 	case *corev1.PersistentVolumeClaim:
-		rsrc, rels, err = genPersistentVolumeClaim(clusterName, k8sRsrc, owners...)
+		rsrc, rels, err = genPersistentVolumeClaim(i.clusterName, obj, owners...)
 	case *corev1.Service:
-		rsrc, rels, err = genService(clusterName, k8sRsrc, owners...)
+		rsrc, rels, err = genService(i.clusterName, obj, owners...)
 	case *appsv1.DaemonSet:
-		rsrc, rels, err = genDaemonSet(clusterName, k8sRsrc, owners...)
+		rsrc, rels, err = genDaemonSet(i.clusterName, obj, owners...)
 	case *appsv1.Deployment:
-		rsrc, rels, err = genDeployment(clusterName, k8sRsrc, owners...)
+		rsrc, rels, err = genDeployment(i.clusterName, obj, owners...)
 	case *appsv1.ReplicaSet:
-		rsrc, rels, err = genReplicaSet(clusterName, k8sRsrc, owners...)
+		rsrc, rels, err = genReplicaSet(i.clusterName, obj, owners...)
 	case *appsv1.StatefulSet:
-		rsrc, rels, err = genStatefulSet(clusterName, k8sRsrc, owners...)
+		rsrc, rels, err = genStatefulSet(i.clusterName, obj, owners...)
 	case *batchv1.Job:
-		rsrc, rels, err = genJob(clusterName, k8sRsrc, owners...)
+		rsrc, rels, err = genJob(i.clusterName, obj, owners...)
 	default:
 		err = fmt.Errorf(
 			"no generator found for %s %s/%s", obj.GetObjectKind().GroupVersionKind().String(),
@@ -93,31 +72,30 @@ func (i *indexer) generate(obj object) (rsrc *resourcev1.Resource, rels []*resou
 	return
 }
 
-func genPod(store resource.Store, clusterName string, k8sRsrc k8sResource, owners ...k8sResource,
+func genPod(store resource.Store, clusterName string, obj object, owners ...object,
 ) (*resourcev1.Resource, []*resourcev1.Relationship, error) {
-	podObj, ok := k8sRsrc.obj.(*corev1.Pod)
+	podObj, ok := obj.(*corev1.Pod)
 	if !ok {
-		return nil, nil, fmt.Errorf("object is not a Pod; got %s", k8sRsrc.obj.GetObjectKind().GroupVersionKind().String())
+		return nil, nil, fmt.Errorf("object is not a Pod; got %s", obj.GetObjectKind().GroupVersionKind().String())
 	}
 
-	rsrc, rels, err := genBase(clusterName, k8sRsrc, owners...)
+	rsrc, rels, err := genBase(clusterName, obj, owners...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create resource and base relationships: %w", err)
 	}
 
 	if podObj.Spec.NodeName != "" {
-		nodeRsrc, err := store.GetResource(resource.KubeObject(
-			schema.GroupVersionResource{
-				Group:    "",
-				Version:  "v1",
-				Resource: "nodes",
-			},
-			&corev1.Node{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: podObj.Spec.NodeName,
+		nodeRsrc, err := store.GetResource(&resourcev1.ResourceRef{
+			TypeUrl: proto.MessageName(&corev1.Node{}),
+			Name:    podObj.Spec.NodeName,
+			Namespace: &resourcev1.Namespace{
+				Namespace: &resourcev1.Namespace_Kube{
+					Kube: &resourcev1.KubernetesNamespace{
+						Cluster: clusterName,
+					},
 				},
 			},
-		))
+		})
 		if err != nil {
 			err = fmt.Errorf("failed to get node resource: %w", err)
 			return nil, nil, errors.NewRetryable(err.Error())
@@ -126,22 +104,22 @@ func genPod(store resource.Store, clusterName string, k8sRsrc k8sResource, owner
 		rsrc.GetMetadata().Zone = nodeRsrc.GetMetadata().Zone
 	}
 
+	objRef := &resourcev1.ResourceRef{
+		TypeUrl:   proto.MessageName(obj),
+		Name:      rsrc.GetMetadata().GetName(),
+		Namespace: rsrc.GetMetadata().GetNamespace(),
+	}
 	for _, volume := range podObj.Spec.Volumes {
 		if volume.PersistentVolumeClaim != nil {
-			pvc := k8sResource{
-				gvr: schema.GroupVersionResource{
-					Group:    "",
-					Version:  "v1",
-					Resource: "persistentvolumeclaims",
-				},
-				obj: &corev1.PersistentVolumeClaim{
-					TypeMeta: metav1.TypeMeta{
-						APIVersion: "v1",
-						Kind:       "PersistentVolumeClaim",
-					},
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      volume.PersistentVolumeClaim.ClaimName,
-						Namespace: podObj.GetNamespace(),
+			pvcRef := &resourcev1.ResourceRef{
+				TypeUrl: proto.MessageName(&corev1.PersistentVolumeClaim{}),
+				Name:    volume.PersistentVolumeClaim.ClaimName,
+				Namespace: &resourcev1.Namespace{
+					Namespace: &resourcev1.Namespace_Kube{
+						Kube: &resourcev1.KubernetesNamespace{
+							Cluster:   clusterName,
+							Namespace: podObj.GetNamespace(),
+						},
 					},
 				},
 			}
@@ -158,20 +136,20 @@ func genPod(store resource.Store, clusterName string, k8sRsrc k8sResource, owner
 			rels = append(rels,
 				&resourcev1.Relationship{
 					Type: &resourcev1.TypeDescriptor{
-						Kind: resource.KindRelationship,
+						Kind: kindRelationship,
 						Type: proto.MessageName(volumeMount),
 					},
-					Subject:   []byte(resource.KubeObject(pvc.gvr, pvc.obj)),
-					Object:    []byte(resource.KubeObject(k8sRsrc.gvr, podObj)),
+					Subject:   pvcRef,
+					Object:    objRef,
 					Predicate: attachedToAny,
 				},
 				&resourcev1.Relationship{
 					Type: &resourcev1.TypeDescriptor{
-						Kind: resource.KindRelationship,
+						Kind: kindRelationship,
 						Type: proto.MessageName(attachedTo),
 					},
-					Subject:   []byte(resource.KubeObject(k8sRsrc.gvr, podObj)),
-					Object:    []byte(resource.KubeObject(pvc.gvr, pvc.obj)),
+					Subject:   objRef,
+					Object:    pvcRef,
 					Predicate: volumeMountAny,
 				},
 			)
@@ -181,55 +159,54 @@ func genPod(store resource.Store, clusterName string, k8sRsrc k8sResource, owner
 	return rsrc, rels, nil
 }
 
-func genNode(clusterName string, k8sRsrc k8sResource, owners ...k8sResource) (*resourcev1.Resource, []*resourcev1.Relationship, error) {
-	rsrc, rels, err := genBase(clusterName, k8sRsrc, owners...)
+func genNode(clusterName string, obj object, owners ...object) (*resourcev1.Resource, []*resourcev1.Relationship, error) {
+	rsrc, rels, err := genBase(clusterName, obj, owners...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create resource and base relationships: %w", err)
 	}
-	rsrc.GetMetadata().Region = k8sRsrc.obj.GetLabels()["topology.kubernetes.io/region"]
-	rsrc.GetMetadata().Zone = k8sRsrc.obj.GetLabels()["topology.kubernetes.io/zone"]
+	rsrc.GetMetadata().Region = obj.GetLabels()["topology.kubernetes.io/region"]
+	rsrc.GetMetadata().Zone = obj.GetLabels()["topology.kubernetes.io/zone"]
 	return rsrc, rels, nil
 }
 
-func genPersistentVolume(clusterName string, k8sRsrc k8sResource, owners ...k8sResource) (*resourcev1.Resource, []*resourcev1.Relationship, error) {
-	rsrc, rels, err := genBase(clusterName, k8sRsrc, owners...)
+func genPersistentVolume(clusterName string, obj object, owners ...object) (*resourcev1.Resource, []*resourcev1.Relationship, error) {
+	rsrc, rels, err := genBase(clusterName, obj, owners...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create resource and base relationships: %w", err)
 	}
-	rsrc.GetMetadata().Region = k8sRsrc.obj.GetLabels()["topology.kubernetes.io/region"]
-	rsrc.GetMetadata().Zone = k8sRsrc.obj.GetLabels()["topology.kubernetes.io/zone"]
+	rsrc.GetMetadata().Region = obj.GetLabels()["topology.kubernetes.io/region"]
+	rsrc.GetMetadata().Zone = obj.GetLabels()["topology.kubernetes.io/zone"]
 	return rsrc, rels, nil
 }
 
-func genPersistentVolumeClaim(clusterName string, k8sRsrc k8sResource, owners ...k8sResource) (*resourcev1.Resource, []*resourcev1.Relationship, error) {
-	pvcObj, ok := k8sRsrc.obj.(*corev1.PersistentVolumeClaim)
+func genPersistentVolumeClaim(clusterName string, obj object, owners ...object) (*resourcev1.Resource, []*resourcev1.Relationship, error) {
+	pvcObj, ok := obj.(*corev1.PersistentVolumeClaim)
 	if !ok {
-		return nil, nil, fmt.Errorf("object is not a PersistentVolumeClaim; got %s", k8sRsrc.obj.GetObjectKind().GroupVersionKind().String())
+		return nil, nil, fmt.Errorf("object is not a PersistentVolumeClaim; got %s", obj.GetObjectKind().GroupVersionKind().String())
 	}
 
-	rsrc, rels, err := genBase(clusterName, k8sRsrc, owners...)
+	rsrc, rels, err := genBase(clusterName, obj, owners...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create resource and base relationships: %w", err)
 	}
 
 	if pvcObj.Spec.VolumeName != "" {
-		pv := k8sResource{
-			gvr: schema.GroupVersionResource{
-				Group:    "",
-				Version:  "v1",
-				Resource: "persistentvolumes",
-			},
-			obj: &corev1.PersistentVolume{
-				TypeMeta: metav1.TypeMeta{
-					APIVersion: "v1",
-					Kind:       "PersistentVolume",
-				},
-				ObjectMeta: metav1.ObjectMeta{
-					Name: pvcObj.Spec.VolumeName,
+		objRef := &resourcev1.ResourceRef{
+			TypeUrl:   proto.MessageName(obj),
+			Name:      rsrc.GetMetadata().GetName(),
+			Namespace: rsrc.GetMetadata().GetNamespace(),
+		}
+		pvRef := &resourcev1.ResourceRef{
+			TypeUrl: proto.MessageName(&corev1.PersistentVolume{}),
+			Name:    pvcObj.Spec.VolumeName,
+			Namespace: &resourcev1.Namespace{
+				Namespace: &resourcev1.Namespace_Kube{
+					Kube: &resourcev1.KubernetesNamespace{
+						Cluster: clusterName,
+					},
 				},
 			},
 		}
-
 		boundBy := &k8sv1.BoundBy{}
 		boundByAny, err := anypb.New(boundBy)
 		if err != nil {
@@ -243,20 +220,20 @@ func genPersistentVolumeClaim(clusterName string, k8sRsrc k8sResource, owners ..
 		rels = append(rels,
 			&resourcev1.Relationship{
 				Type: &resourcev1.TypeDescriptor{
-					Kind: resource.KindRelationship,
+					Kind: kindRelationship,
 					Type: proto.MessageName(claimsFrom),
 				},
-				Subject:   []byte(resource.KubeObject(k8sRsrc.gvr, pvcObj)),
-				Object:    []byte(resource.KubeObject(pv.gvr, pv.obj)),
+				Subject:   objRef,
+				Object:    pvRef,
 				Predicate: claimsFromAny,
 			},
 			&resourcev1.Relationship{
 				Type: &resourcev1.TypeDescriptor{
-					Kind: resource.KindRelationship,
+					Kind: kindRelationship,
 					Type: proto.MessageName(boundBy),
 				},
-				Subject:   []byte(resource.KubeObject(pv.gvr, pv.obj)),
-				Object:    []byte(resource.KubeObject(k8sRsrc.gvr, pvcObj)),
+				Subject:   pvRef,
+				Object:    objRef,
 				Predicate: boundByAny,
 			},
 		)
@@ -265,62 +242,71 @@ func genPersistentVolumeClaim(clusterName string, k8sRsrc k8sResource, owners ..
 	return rsrc, rels, nil
 }
 
-func genService(clusterName string, k8sRsrc k8sResource, owners ...k8sResource) (*resourcev1.Resource, []*resourcev1.Relationship, error) {
-	return genBase(clusterName, k8sRsrc, owners...)
+func genService(clusterName string, obj object, owners ...object) (*resourcev1.Resource, []*resourcev1.Relationship, error) {
+	return genBase(clusterName, obj, owners...)
 }
 
-func genDaemonSet(clusterName string, k8sRsrc k8sResource, owners ...k8sResource) (*resourcev1.Resource, []*resourcev1.Relationship, error) {
-	return genBase(clusterName, k8sRsrc, owners...)
+func genDaemonSet(clusterName string, obj object, owners ...object) (*resourcev1.Resource, []*resourcev1.Relationship, error) {
+	return genBase(clusterName, obj, owners...)
 }
 
-func genDeployment(clusterName string, k8sRsrc k8sResource, owners ...k8sResource) (*resourcev1.Resource, []*resourcev1.Relationship, error) {
-	return genBase(clusterName, k8sRsrc, owners...)
+func genDeployment(clusterName string, obj object, owners ...object) (*resourcev1.Resource, []*resourcev1.Relationship, error) {
+	return genBase(clusterName, obj, owners...)
 }
 
-func genReplicaSet(clusterName string, k8sRsrc k8sResource, owners ...k8sResource) (*resourcev1.Resource, []*resourcev1.Relationship, error) {
-	return genBase(clusterName, k8sRsrc, owners...)
+func genReplicaSet(clusterName string, obj object, owners ...object) (*resourcev1.Resource, []*resourcev1.Relationship, error) {
+	return genBase(clusterName, obj, owners...)
 }
 
-func genStatefulSet(clusterName string, k8sRsrc k8sResource, owners ...k8sResource) (*resourcev1.Resource, []*resourcev1.Relationship, error) {
-	return genBase(clusterName, k8sRsrc, owners...)
+func genStatefulSet(clusterName string, obj object, owners ...object) (*resourcev1.Resource, []*resourcev1.Relationship, error) {
+	return genBase(clusterName, obj, owners...)
 }
 
-func genJob(clusterName string, k8sRsrc k8sResource, owners ...k8sResource) (*resourcev1.Resource, []*resourcev1.Relationship, error) {
-	return genBase(clusterName, k8sRsrc, owners...)
+func genJob(clusterName string, obj object, owners ...object) (*resourcev1.Resource, []*resourcev1.Relationship, error) {
+	return genBase(clusterName, obj, owners...)
 }
 
-func genBase(clusterName string, k8sRsrc k8sResource, owners ...k8sResource) (*resourcev1.Resource, []*resourcev1.Relationship, error) {
-	data, err := k8sRsrc.obj.Marshal()
+func genBase(clusterName string, obj object, owners ...object) (*resourcev1.Resource, []*resourcev1.Relationship, error) {
+	data, err := obj.Marshal()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to marshal object: %w", err)
 	}
 
 	rsrc := &resourcev1.Resource{
 		Type: &resourcev1.TypeDescriptor{
-			Kind: resource.KindResource,
-			Type: proto.MessageName(k8sRsrc.obj),
+			Kind: kindResource,
+			Type: proto.MessageName(obj),
 		},
 		Metadata: &resourcev1.ResourceMeta{
 			Provider:   resourcev1.Provider_PROVIDER_KUBERNETES,
-			ProviderId: string(k8sRsrc.obj.GetUID()),
-			Name:       k8sRsrc.obj.GetName(),
+			ProviderId: string(obj.GetUID()),
+			Name:       obj.GetName(),
 			Namespace: &resourcev1.Namespace{
 				Namespace: &resourcev1.Namespace_Kube{
 					Kube: &resourcev1.KubernetesNamespace{
 						Cluster:   clusterName,
-						Namespace: k8sRsrc.obj.GetNamespace(),
+						Namespace: obj.GetNamespace(),
 					},
 				},
 			},
-			Tags: labelsToTags(k8sRsrc.obj.GetLabels()),
+			Tags: labelsToTags(obj.GetLabels()),
 		},
 		Spec: &anypb.Any{
-			TypeUrl: proto.MessageName(k8sRsrc.obj),
+			TypeUrl: proto.MessageName(obj),
 			Value:   data,
 		},
 	}
 
 	// Add relationships to the cluster and the object.
+	clusterRef := &resourcev1.ResourceRef{
+		TypeUrl: string((&k8sv1.Cluster{}).ProtoReflect().Descriptor().FullName()),
+		Name:    clusterName,
+	}
+	objRef := &resourcev1.ResourceRef{
+		TypeUrl:   rsrc.Type.Type,
+		Name:      rsrc.Metadata.Name,
+		Namespace: rsrc.Metadata.Namespace,
+	}
 	rels := make([]*resourcev1.Relationship, 0, len(owners)+2)
 	contains := &k8sv1.Contains{}
 	containsAny, err := anypb.New(contains)
@@ -335,26 +321,38 @@ func genBase(clusterName string, k8sRsrc k8sResource, owners ...k8sResource) (*r
 	rels = append(rels,
 		&resourcev1.Relationship{
 			Type: &resourcev1.TypeDescriptor{
-				Kind: resource.KindRelationship,
+				Kind: kindRelationship,
 				Type: proto.MessageName(contains),
 			},
-			Subject:   []byte(resource.KubeCluster),
-			Object:    []byte(resource.KubeObject(k8sRsrc.gvr, k8sRsrc.obj)),
+			Subject:   clusterRef,
+			Object:    objRef,
 			Predicate: containsAny,
 		},
 		&resourcev1.Relationship{
 			Type: &resourcev1.TypeDescriptor{
-				Kind: resource.KindRelationship,
+				Kind: kindRelationship,
 				Type: proto.MessageName(containedBy),
 			},
-			Subject:   []byte(resource.KubeObject(k8sRsrc.gvr, k8sRsrc.obj)),
-			Object:    []byte(resource.KubeCluster),
+			Subject:   objRef,
+			Object:    clusterRef,
 			Predicate: containedByAny,
 		},
 	)
 
 	// Add relationships to the resource owners if any.
 	for _, owner := range owners {
+		ownerRef := &resourcev1.ResourceRef{
+			TypeUrl: proto.MessageName(owner),
+			Name:    owner.GetName(),
+			Namespace: &resourcev1.Namespace{
+				Namespace: &resourcev1.Namespace_Kube{
+					Kube: &resourcev1.KubernetesNamespace{
+						Cluster:   clusterName,
+						Namespace: owner.GetNamespace(),
+					},
+				},
+			},
+		}
 		owns := &k8sv1.Owns{}
 		ownsAny, err := anypb.New(owns)
 		if err != nil {
@@ -368,20 +366,20 @@ func genBase(clusterName string, k8sRsrc k8sResource, owners ...k8sResource) (*r
 		rels = append(rels,
 			&resourcev1.Relationship{
 				Type: &resourcev1.TypeDescriptor{
-					Kind: resource.KindRelationship,
+					Kind: kindRelationship,
 					Type: proto.MessageName(owns),
 				},
-				Subject:   []byte(resource.KubeObject(owner.gvr, owner.obj)),
-				Object:    []byte(resource.KubeObject(k8sRsrc.gvr, k8sRsrc.obj)),
+				Subject:   ownerRef,
+				Object:    objRef,
 				Predicate: ownsAny,
 			},
 			&resourcev1.Relationship{
 				Type: &resourcev1.TypeDescriptor{
-					Kind: resource.KindRelationship,
+					Kind: kindRelationship,
 					Type: proto.MessageName(ownedBy),
 				},
-				Subject:   []byte(resource.KubeObject(k8sRsrc.gvr, k8sRsrc.obj)),
-				Object:    []byte(resource.KubeObject(owner.gvr, owner.obj)),
+				Subject:   objRef,
+				Object:    ownerRef,
 				Predicate: ownedByAny,
 			},
 		)

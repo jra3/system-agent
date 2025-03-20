@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -60,13 +61,17 @@ func New() (*Store, error) {
 	return inv, nil
 }
 
-// AddResource adds rsrc to the resource store located by name.
-// If a resource already exists with the same name, it will return an error.
-func (s *Store) AddResource(name string, rsrc *resourcev1.Resource) error {
+// AddResource adds rsrc to the resource store.
+// If a resource already exists, it will return an error.
+func (s *Store) AddResource(rsrc *resourcev1.Resource) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	key := buildKey(resourceKey, []byte(name))
+	r, err := encodeResourceKey(ref(rsrc))
+	if err != nil {
+		return fmt.Errorf("failed to encode resource key: %w", err)
+	}
+	key := buildKey(resourceKey, []byte(r))
 
 	return s.store.Update(func(txn *badger.Txn) error {
 		_, err := txn.Get(key)
@@ -89,14 +94,19 @@ func (s *Store) AddResource(name string, rsrc *resourcev1.Resource) error {
 	})
 }
 
-// UpdateResource updates a resource located by name with rsrc.
-// If a resource already exists with the same name, it will be merged with rsrc,
+// UpdateResource updates rsrc in the resource store.
+// If the resource already exists, it will be merged with rsrc,
 // otherwise a new resource will be add at name.
-func (s *Store) UpdateResource(name string, rsrc *resourcev1.Resource) error {
+func (s *Store) UpdateResource(rsrc *resourcev1.Resource) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	key := buildKey(resourceKey, []byte(name))
+	r, err := encodeResourceKey(ref(rsrc))
+	if err != nil {
+		return fmt.Errorf("failed to encode resource key: %w", err)
+	}
+	key := buildKey(resourceKey, []byte(r))
+
 	return s.store.Update(func(txn *badger.Txn) error {
 		item, err := txn.Get(key)
 		// If the resource does not exist, create it
@@ -138,15 +148,19 @@ func (s *Store) UpdateResource(name string, rsrc *resourcev1.Resource) error {
 	})
 }
 
-// GetResource returns the resource located by name.
+// GetResource returns the resource identified by ref.
 // If the resource does not exist, it will return ErrResourceNotFound.
-func (s *Store) GetResource(name string) (*resourcev1.Resource, error) {
+func (s *Store) GetResource(ref *resourcev1.ResourceRef) (*resourcev1.Resource, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	key := buildKey(resourceKey, []byte(name))
+	r, err := encodeResourceKey(ref)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode resource key: %w", err)
+	}
+	key := buildKey(resourceKey, []byte(r))
 	var val []byte
-	err := s.store.View(func(txn *badger.Txn) error {
+	err = s.store.View(func(txn *badger.Txn) error {
 		item, err := txn.Get(key)
 		if err != nil {
 			return err
@@ -165,18 +179,23 @@ func (s *Store) GetResource(name string) (*resourcev1.Resource, error) {
 	return rsrc, err
 }
 
-// DeleteResource deletes the resource located by name.
+// DeleteResource deletes the resource identfied by ref.
 // It also cascade deletes all relationships where the resource is the subject
 // or object.
-func (s *Store) DeleteResource(name string) error {
+func (s *Store) DeleteResource(ref *resourcev1.ResourceRef) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	r, err := encodeResourceKey(ref)
+	if err != nil {
+		return fmt.Errorf("failed to encode resource key: %w", err)
+	}
 
 	return s.store.Update(func(txn *badger.Txn) error {
 		delObjs := make([]objKey, 0)
 
 		// 1. Delete all relationships where resource is the subject
-		subjectIdxLookup := buildKey(index, subjectIdx, keyPart(name))
+		subjectIdxLookup := buildKey(index, subjectIdx, keyPart(r))
 		delSubjectObjs, err := deleteIndexedObjects(txn, subjectIdxLookup)
 		if err != nil {
 			return fmt.Errorf("failed to delete subject relationships: %w", err)
@@ -184,7 +203,7 @@ func (s *Store) DeleteResource(name string) error {
 		delObjs = append(delObjs, delSubjectObjs...)
 
 		// 2. Delete all relationships where resource is the object
-		objectIdxLookup := buildKey(index, objectIdx, keyPart(name))
+		objectIdxLookup := buildKey(index, objectIdx, keyPart(r))
 		delObjectObjs, err := deleteIndexedObjects(txn, objectIdxLookup)
 		if err != nil {
 			return fmt.Errorf("failed to delete object relationships: %w", err)
@@ -219,14 +238,18 @@ func (s *Store) DeleteResource(name string) error {
 			}
 		}
 		// 4. Finally delete the actual resource
-		return txn.Delete(buildKey(resourceKey, []byte(name)))
+		return txn.Delete(buildKey(resourceKey, []byte(r)))
 	})
 }
 
 // AddRelationships adds rels to the inventory.
 func (s *Store) AddRelationships(rels ...*resourcev1.Relationship) error {
 	for _, rel := range rels {
-		if bytes.Equal(rel.GetSubject(), rel.GetObject()) {
+		if rel.GetPredicate() == nil {
+			return fmt.Errorf("predicate cannot be nil")
+		}
+
+		if reflect.DeepEqual(rel.GetSubject(), rel.GetObject()) {
 			return fmt.Errorf(
 				"[%s;%s;%s]: subject and object cannot be equal",
 				rel.GetSubject(),
@@ -258,12 +281,20 @@ func (s *Store) AddRelationships(rels ...*resourcev1.Relationship) error {
 				return fmt.Errorf("failed to update predicate index: %w", err)
 			}
 
-			objectIdxKey := buildKey(index, objectIdx, rel.Object)
+			objectKey, err := encodeResourceKey(rel.GetObject())
+			if err != nil {
+				return fmt.Errorf("failed to encode object key: %w", err)
+			}
+			objectIdxKey := buildKey(index, objectIdx, []byte(objectKey))
 			if err := addObjKeyToIndex(txn, objectIdxKey, h[:]); err != nil {
 				return fmt.Errorf("failed to update object index: %w", err)
 			}
 
-			subjectIdxKey := buildKey(index, subjectIdx, rel.Subject)
+			subjectKey, err := encodeResourceKey(rel.GetSubject())
+			if err != nil {
+				return fmt.Errorf("failed to encode subject key: %w", err)
+			}
+			subjectIdxKey := buildKey(index, subjectIdx, []byte(subjectKey))
 			if err := addObjKeyToIndex(txn, subjectIdxKey, h[:]); err != nil {
 				return fmt.Errorf("failed to update subject index: %w", err)
 			}
@@ -275,9 +306,9 @@ func (s *Store) AddRelationships(rels ...*resourcev1.Relationship) error {
 // GetRelationships returns all relationships that match the combination subject, object,
 // and predicate with the following invariants:
 //
-// subject == "" matches any subject
+// subject == nil matches any subject
 //
-// object == "" matches any object
+// object == nil matches any object
 //
 // predicateT == nil matches any predicate
 //
@@ -285,14 +316,18 @@ func (s *Store) AddRelationships(rels ...*resourcev1.Relationship) error {
 //
 // Examples:
 //
-//   - GetRelationships("foo", "", nil) returns all relationships where subject is "foo".
+//   - GetRelationships(&resourcev1.ResourceRef{TypeUrl: "type", Name: "foo"}, nil, nil)
+//     returns all relationships where subject is "foo".
 //
-//   - GetRelationships("", "", &ConnectedTo{}) returns all relationships where predicate
+//   - GetRelationships(nil, nil, &ConnectedTo{}) returns all relationships where predicate
 //     has a protobuf message type of ConnectedTo between any subject and object.
 //
-//   - GetRelationships("foo", "bar", &ConnectedTo{}) returns all ConnectedTo relationships
-//     between subject "foo" and object "bar".
-func (s *Store) GetRelationships(subject, object string, predicateT proto.Message) ([]*resourcev1.Relationship, error) {
+//   - GetRelationships(
+//     &resourcev1.ResourceRef{TypeUrl: "type", Name: "foo"},
+//     &resourcev1.ResourceRef{TypeUrl: "type", Name: "bar"},
+//     &ConnectedTo{})
+//     returns all ConnectedTo relationships between subject "foo" and object "bar".
+func (s *Store) GetRelationships(subject, object *resourcev1.ResourceRef, predicateT proto.Message) ([]*resourcev1.Relationship, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -301,11 +336,19 @@ func (s *Store) GetRelationships(subject, object string, predicateT proto.Messag
 	err := s.store.View(func(txn *badger.Txn) error {
 		// 1. Decide which indexes to use
 		indexes := make([]indexKey, 0)
-		if subject != "" {
-			indexes = append(indexes, buildKey(index, subjectIdx, keyPart(subject)))
+		if subject != nil {
+			subjectKey, err := encodeResourceKey(subject)
+			if err != nil {
+				return fmt.Errorf("failed to encode subject key: %w", err)
+			}
+			indexes = append(indexes, buildKey(index, subjectIdx, keyPart(subjectKey)))
 		}
-		if object != "" {
-			indexes = append(indexes, buildKey(index, objectIdx, keyPart(object)))
+		if object != nil {
+			objectKey, err := encodeResourceKey(object)
+			if err != nil {
+				return fmt.Errorf("failed to encode object key: %w", err)
+			}
+			indexes = append(indexes, buildKey(index, objectIdx, keyPart(objectKey)))
 		}
 		if predicateT != nil {
 			predicate := []byte(predicateT.ProtoReflect().Descriptor().FullName())

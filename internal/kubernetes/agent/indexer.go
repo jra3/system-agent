@@ -9,15 +9,20 @@ import (
 	"github.com/antimetal/agent/pkg/resource"
 	k8sv1 "github.com/antimetal/apis/gengo/kubernetes/v1"
 	resourcev1 "github.com/antimetal/apis/gengo/resource/v1"
+	gogoproto "github.com/gogo/protobuf/proto"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
-	"k8s.io/apimachinery/pkg/api/meta"
+)
+
+var (
+	kindResource     = string((&resourcev1.Resource{}).ProtoReflect().Descriptor().FullName())
+	kindRelationship = string((&resourcev1.Relationship{}).ProtoReflect().Descriptor().FullName())
 )
 
 type indexer struct {
-	provider cluster.Provider
-	store    resource.Store
-	mapper   meta.RESTMapper
+	clusterName string
+	provider    cluster.Provider
+	store       resource.Store
 }
 
 func (i *indexer) LoadClusterInfo(ctx context.Context, major string, minor string) error {
@@ -39,9 +44,9 @@ func (i *indexer) LoadClusterInfo(ctx context.Context, major string, minor strin
 		return fmt.Errorf("failed to marshal cluster: %w", err)
 	}
 
-	return i.store.AddResource(resource.KubeCluster, &resourcev1.Resource{
+	return i.store.AddResource(&resourcev1.Resource{
 		Type: &resourcev1.TypeDescriptor{
-			Kind: resource.KindResource,
+			Kind: kindResource,
 			Type: string(cluster.ProtoReflect().Descriptor().FullName()),
 		},
 		Metadata: &resourcev1.ResourceMeta{
@@ -55,16 +60,11 @@ func (i *indexer) LoadClusterInfo(ctx context.Context, major string, minor strin
 }
 
 func (i *indexer) Add(ctx context.Context, obj object) error {
-	gvk := obj.GetObjectKind().GroupVersionKind()
 	rsrc, rels, err := i.generate(obj)
 	if err != nil {
 		return fmt.Errorf("failed to generate resource and relationships: %w", err)
 	}
-	mapping, err := i.mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
-	if err != nil {
-		return fmt.Errorf("failed to get REST mapping: %w", err)
-	}
-	if err := i.store.AddResource(resource.KubeObject(mapping.Resource, obj), rsrc); err != nil {
+	if err := i.store.AddResource(rsrc); err != nil {
 		return fmt.Errorf("failed to add resource to inventory: %w", err)
 	}
 	if err := i.store.AddRelationships(rels...); err != nil {
@@ -74,16 +74,11 @@ func (i *indexer) Add(ctx context.Context, obj object) error {
 }
 
 func (i *indexer) Update(ctx context.Context, obj object) error {
-	gvk := obj.GetObjectKind().GroupVersionKind()
 	rsrc, rels, err := i.generate(obj)
 	if err != nil {
 		return fmt.Errorf("failed to generate resource: %w", err)
 	}
-	mapping, err := i.mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
-	if err != nil {
-		return fmt.Errorf("failed to get REST mapping: %w", err)
-	}
-	if err := i.store.UpdateResource(resource.KubeObject(mapping.Resource, obj), rsrc); err != nil {
+	if err := i.store.UpdateResource(rsrc); err != nil {
 		return fmt.Errorf("failed to update resource to inventory: %w", err)
 	}
 
@@ -92,7 +87,7 @@ func (i *indexer) Update(ctx context.Context, obj object) error {
 		if err != nil {
 			return fmt.Errorf("failed to unmarshal predicate: %w", err)
 		}
-		rels, err := i.store.GetRelationships(string(rel.Subject), string(rel.Object), pred)
+		rels, err := i.store.GetRelationships(rel.GetSubject(), rel.GetObject(), pred)
 		if err != nil {
 			err = fmt.Errorf("failed to find existing relationships: %w", err)
 			return errors.NewRetryable(err.Error())
@@ -108,12 +103,19 @@ func (i *indexer) Update(ctx context.Context, obj object) error {
 }
 
 func (i *indexer) Delete(ctx context.Context, obj object) error {
-	gvk := obj.GetObjectKind().GroupVersionKind()
-	mapping, err := i.mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
-	if err != nil {
-		return fmt.Errorf("failed to get REST mapping: %w", err)
+	ref := &resourcev1.ResourceRef{
+		TypeUrl: gogoproto.MessageName(obj),
+		Name:    obj.GetName(),
+		Namespace: &resourcev1.Namespace{
+			Namespace: &resourcev1.Namespace_Kube{
+				Kube: &resourcev1.KubernetesNamespace{
+					Cluster:   i.clusterName,
+					Namespace: obj.GetNamespace(),
+				},
+			},
+		},
 	}
-	return i.store.DeleteResource(resource.KubeObject(mapping.Resource, obj))
+	return i.store.DeleteResource(ref)
 }
 
 func getProvider(prov cluster.Provider) k8sv1.ClusterProvider {

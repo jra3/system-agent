@@ -9,11 +9,13 @@ import (
 	"github.com/antimetal/agent/pkg/errors"
 	"github.com/antimetal/agent/pkg/resource"
 	"github.com/go-logr/logr"
+	gogoproto "github.com/gogo/protobuf/proto"
 	"golang.org/x/sync/errgroup"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/discovery"
@@ -40,6 +42,14 @@ const (
 
 	maxConcurrentIndexers = 1
 )
+
+type object interface {
+	gogoproto.Message
+	gogoproto.Marshaler
+	gogoproto.Unmarshaler
+	metav1.Object
+	runtime.Object
+}
 
 var (
 	resourcesToWatch = []object{
@@ -95,7 +105,6 @@ func (c *Controller) SetupWithManager(mgr manager.Manager) error {
 
 	indexer := &indexer{
 		store:    c.Store,
-		mapper:   mgr.GetRESTMapper(),
 		provider: c.Provider,
 	}
 

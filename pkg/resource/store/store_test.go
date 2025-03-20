@@ -1,18 +1,17 @@
-package store_test
+package store
 
 import (
 	"testing"
 
 	"github.com/antimetal/agent/pkg/errors"
 	"github.com/antimetal/agent/pkg/resource"
-	"github.com/antimetal/agent/pkg/resource/store"
 	resourcev1 "github.com/antimetal/apis/gengo/resource/v1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
 func TestInventory_AddResource(t *testing.T) {
-	inv, err := store.New()
+	inv, err := New()
 	if err != nil {
 		t.Fatalf("failed to create inventory: %v", err)
 	}
@@ -27,11 +26,11 @@ func TestInventory_AddResource(t *testing.T) {
 		},
 	}
 
-	if err := inv.AddResource("test", rsrc); err != nil {
+	if err := inv.AddResource(rsrc); err != nil {
 		t.Fatalf("failed to add resource: %v", err)
 	}
 
-	r, err := inv.GetResource("test")
+	r, err := inv.GetResource(ref(rsrc))
 	if err != nil {
 		t.Fatalf("failed to get resource: %v", err)
 	}
@@ -49,14 +48,14 @@ func TestInventory_AddResource(t *testing.T) {
 		t.Fatalf("expected update time to be set")
 	}
 
-	_, err = inv.GetResource("notexist")
+	_, err = inv.GetResource(&resourcev1.ResourceRef{TypeUrl: "notexist", Name: "notexist"})
 	if !errors.Is(err, resource.ErrResourceNotFound) {
 		t.Fatalf("expected error %v, got %v", resource.ErrResourceNotFound, err)
 	}
 }
 
 func TestInventory_UpdateResourceNewResource(t *testing.T) {
-	inv, err := store.New()
+	inv, err := New()
 	if err != nil {
 		t.Fatalf("failed to create inventory: %v", err)
 	}
@@ -71,11 +70,11 @@ func TestInventory_UpdateResourceNewResource(t *testing.T) {
 		},
 	}
 
-	if err := inv.UpdateResource("test", rsrc); err != nil {
+	if err := inv.UpdateResource(rsrc); err != nil {
 		t.Fatalf("failed to add resource: %v", err)
 	}
 
-	r, err := inv.GetResource("test")
+	r, err := inv.GetResource(ref(rsrc))
 	if err != nil {
 		t.Fatalf("failed to get resource: %v", err)
 	}
@@ -93,14 +92,14 @@ func TestInventory_UpdateResourceNewResource(t *testing.T) {
 		t.Fatalf("expected update time to be set")
 	}
 
-	_, err = inv.GetResource("notexist")
+	_, err = inv.GetResource(&resourcev1.ResourceRef{TypeUrl: "notexist", Name: "notexist"})
 	if !errors.Is(err, resource.ErrResourceNotFound) {
 		t.Fatalf("expected error %v, got %v", resource.ErrResourceNotFound, err)
 	}
 }
 
 func TestInventory_UpdateResource(t *testing.T) {
-	inv, err := store.New()
+	inv, err := New()
 	if err != nil {
 		t.Fatalf("failed to create inventory: %v", err)
 	}
@@ -115,27 +114,27 @@ func TestInventory_UpdateResource(t *testing.T) {
 		},
 	}
 
-	if err := inv.AddResource("test", rsrc); err != nil {
+	if err := inv.AddResource(rsrc); err != nil {
 		t.Fatalf("failed to add resource: %v", err)
 	}
 
-	r, err := inv.GetResource("test")
+	r, err := inv.GetResource(ref(rsrc))
 	if err != nil {
 		t.Fatalf("failed to get resource: %v", err)
 	}
 
-	r.Metadata.Name = "test2"
-	if err := inv.UpdateResource("test", r); err != nil {
+	r.Metadata.Region = "us-east-1"
+	if err := inv.UpdateResource(r); err != nil {
 		t.Fatalf("failed to update resource: %v", err)
 	}
 
-	r2, err := inv.GetResource("test")
+	r2, err := inv.GetResource(ref(rsrc))
 	if err != nil {
 		t.Fatalf("failed to get resource: %v", err)
 	}
 
-	if r2.Metadata.Name != "test2" {
-		t.Fatalf("expected name test2, got %q", r.Metadata.Name)
+	if r2.Metadata.Region != "us-east-1" {
+		t.Fatalf("expected region us-east-1, got %q", r.Metadata.Name)
 	}
 	if r.Type.Type != r2.Type.Type {
 		t.Fatalf("expected type %q, got %q", rsrc.Type.Type, r.Type.Type)
@@ -150,13 +149,13 @@ func TestInventory_UpdateResource(t *testing.T) {
 func TestInventory_GetRelationships(t *testing.T) {
 	type testCase struct {
 		name              string
-		subject           string
-		object            string
+		subject           *resourcev1.ResourceRef
+		object            *resourcev1.ResourceRef
 		predicate         proto.Message
 		expectedNumResult int
 	}
 
-	inv, err := store.New()
+	inv, err := New()
 	if err != nil {
 		t.Fatalf("failed to create inventory: %v", err)
 	}
@@ -181,7 +180,7 @@ func TestInventory_GetRelationships(t *testing.T) {
 		},
 	}
 	for _, rsrc := range rsrcs {
-		if err := inv.AddResource(rsrc.GetMetadata().GetName(), rsrc); err != nil {
+		if err := inv.AddResource(rsrc); err != nil {
 			t.Fatalf("failed to add resource: %v", err)
 		}
 	}
@@ -197,23 +196,23 @@ func TestInventory_GetRelationships(t *testing.T) {
 
 	rels := []*resourcev1.Relationship{
 		{
-			Subject:   []byte("test"),
-			Object:    []byte("test2"),
+			Subject:   &resourcev1.ResourceRef{TypeUrl: "bar", Name: "test"},
+			Object:    &resourcev1.ResourceRef{TypeUrl: "baz", Name: "test2"},
 			Predicate: predicate,
 		},
 		{
-			Subject:   []byte("test2"),
-			Object:    []byte("test"),
+			Subject:   &resourcev1.ResourceRef{TypeUrl: "baz", Name: "test2"},
+			Object:    &resourcev1.ResourceRef{TypeUrl: "bar", Name: "test"},
 			Predicate: predicate2,
 		},
 		{
-			Subject:   []byte("test"),
-			Object:    []byte("test2"),
+			Subject:   &resourcev1.ResourceRef{TypeUrl: "bar", Name: "test"},
+			Object:    &resourcev1.ResourceRef{TypeUrl: "baz", Name: "test2"},
 			Predicate: predicate2,
 		},
 		{
-			Subject:   []byte("test2"),
-			Object:    []byte("test3"),
+			Subject:   &resourcev1.ResourceRef{TypeUrl: "baz", Name: "test2"},
+			Object:    &resourcev1.ResourceRef{TypeUrl: "qux", Name: "test3"},
 			Predicate: predicate,
 		},
 	}
@@ -223,35 +222,56 @@ func TestInventory_GetRelationships(t *testing.T) {
 
 	testCases := []testCase{
 		{
-			name:              "empty",
-			subject:           "notexist",
-			object:            "test",
+			name: "empty",
+			subject: &resourcev1.ResourceRef{
+				TypeUrl: "notexist",
+				Name:    "notexist",
+			},
+			object: &resourcev1.ResourceRef{
+				TypeUrl: "bar",
+				Name:    "test",
+			},
 			predicate:         &resourcev1.Resource{},
 			expectedNumResult: 0,
 		},
 		{
-			name:              "subject",
-			subject:           "test",
+			name: "subject",
+			subject: &resourcev1.ResourceRef{
+				TypeUrl: "bar",
+				Name:    "test",
+			},
 			expectedNumResult: 2,
 		},
 		{
-			name:              "subject-2",
-			subject:           "test2",
+			name: "subject-2",
+			subject: &resourcev1.ResourceRef{
+				TypeUrl: "baz",
+				Name:    "test2",
+			},
 			expectedNumResult: 2,
 		},
 		{
-			name:              "subject-3",
-			subject:           "test3",
+			name: "subject-3",
+			subject: &resourcev1.ResourceRef{
+				TypeUrl: "qux",
+				Name:    "test3",
+			},
 			expectedNumResult: 0,
 		},
 		{
-			name:              "object",
-			object:            "test2",
+			name: "object",
+			object: &resourcev1.ResourceRef{
+				TypeUrl: "baz",
+				Name:    "test2",
+			},
 			expectedNumResult: 2,
 		},
 		{
-			name:              "object-2",
-			object:            "test3",
+			name: "object-2",
+			object: &resourcev1.ResourceRef{
+				TypeUrl: "qux",
+				Name:    "test3",
+			},
 			expectedNumResult: 1,
 		},
 		{
@@ -265,33 +285,57 @@ func TestInventory_GetRelationships(t *testing.T) {
 			expectedNumResult: 2,
 		},
 		{
-			name:              "subject-object-predicate",
-			subject:           "test",
-			object:            "test2",
+			name: "subject-object-predicate",
+			subject: &resourcev1.ResourceRef{
+				TypeUrl: "bar",
+				Name:    "test",
+			},
+			object: &resourcev1.ResourceRef{
+				TypeUrl: "baz",
+				Name:    "test2",
+			},
 			predicate:         &resourcev1.Resource{},
 			expectedNumResult: 1,
 		},
 		{
-			name:              "subject-object",
-			subject:           "test",
-			object:            "test2",
+			name: "subject-object",
+			subject: &resourcev1.ResourceRef{
+				TypeUrl: "bar",
+				Name:    "test",
+			},
+			object: &resourcev1.ResourceRef{
+				TypeUrl: "baz",
+				Name:    "test2",
+			},
 			expectedNumResult: 2,
 		},
 		{
-			name:              "subject-object-2",
-			subject:           "test2",
-			object:            "test3",
+			name: "subject-object-2",
+			subject: &resourcev1.ResourceRef{
+				TypeUrl: "baz",
+				Name:    "test2",
+			},
+			object: &resourcev1.ResourceRef{
+				TypeUrl: "qux",
+				Name:    "test3",
+			},
 			expectedNumResult: 1,
 		},
 		{
-			name:              "subject-predicate",
-			subject:           "test2",
+			name: "subject-predicate",
+			subject: &resourcev1.ResourceRef{
+				TypeUrl: "baz",
+				Name:    "test2",
+			},
 			predicate:         &resourcev1.Relationship{},
 			expectedNumResult: 1,
 		},
 		{
-			name:              "object-predicate",
-			object:            "test",
+			name: "object-predicate",
+			object: &resourcev1.ResourceRef{
+				TypeUrl: "bar",
+				Name:    "test",
+			},
 			predicate:         &resourcev1.Relationship{},
 			expectedNumResult: 1,
 		},
@@ -315,7 +359,7 @@ func TestInventory_GetRelationships(t *testing.T) {
 }
 
 func TestInventory_DeleteResource_CascadeDelete(t *testing.T) {
-	inv, err := store.New()
+	inv, err := New()
 	if err != nil {
 		t.Fatalf("failed to create inventory: %v", err)
 	}
@@ -323,34 +367,52 @@ func TestInventory_DeleteResource_CascadeDelete(t *testing.T) {
 
 	rsrc := &resourcev1.Resource{
 		Type: &resourcev1.TypeDescriptor{
-			Type: "foo",
+			Type: "test",
 		},
 		Metadata: &resourcev1.ResourceMeta{
 			Name: "foo",
 		},
 	}
-	if err := inv.AddResource("foo", rsrc); err != nil {
+	if err := inv.AddResource(rsrc); err != nil {
 		t.Fatalf("failed to add resource: %v", err)
 	}
 
 	rels := []*resourcev1.Relationship{
 		{
-			Subject: []byte("foo"),
-			Object:  []byte("bar"),
+			Subject: &resourcev1.ResourceRef{
+				TypeUrl: "test",
+				Name:    "foo",
+			},
+			Object: &resourcev1.ResourceRef{
+				TypeUrl: "test",
+				Name:    "bar",
+			},
 			Predicate: &anypb.Any{
 				TypeUrl: "foo",
 			},
 		},
 		{
-			Subject: []byte("bar"),
-			Object:  []byte("foo"),
+			Subject: &resourcev1.ResourceRef{
+				TypeUrl: "test",
+				Name:    "bar",
+			},
+			Object: &resourcev1.ResourceRef{
+				TypeUrl: "test",
+				Name:    "foo",
+			},
 			Predicate: &anypb.Any{
 				TypeUrl: "bar",
 			},
 		},
 		{
-			Subject: []byte("bar"),
-			Object:  []byte("baz"),
+			Subject: &resourcev1.ResourceRef{
+				TypeUrl: "test",
+				Name:    "bar",
+			},
+			Object: &resourcev1.ResourceRef{
+				TypeUrl: "test",
+				Name:    "baz",
+			},
 			Predicate: &anypb.Any{
 				TypeUrl: "baz",
 			},
@@ -360,26 +422,41 @@ func TestInventory_DeleteResource_CascadeDelete(t *testing.T) {
 		t.Fatalf("failed to add relationships: %v", err)
 	}
 
-	if err := inv.DeleteResource("foo"); err != nil {
+	if err := inv.DeleteResource(ref(rsrc)); err != nil {
 		t.Fatalf("failed to delete resource: %v", err)
 	}
 
-	if rsrc, err := inv.GetResource("foo"); !errors.Is(err, resource.ErrResourceNotFound) {
+	if rsrc, err := inv.GetResource(ref(rsrc)); !errors.Is(err, resource.ErrResourceNotFound) {
 		t.Fatalf("expected error %v, got %v; rsrc: %+v", resource.ErrResourceNotFound, err, rsrc)
 	}
-	if rel, err := inv.GetRelationships("foo", "bar", nil); !errors.Is(err, resource.ErrRelationshipsNotFound) {
+	rel, err := inv.GetRelationships(
+		&resourcev1.ResourceRef{TypeUrl: "test", Name: "foo"},
+		&resourcev1.ResourceRef{TypeUrl: "test", Name: "bar"},
+		nil,
+	)
+	if !errors.Is(err, resource.ErrRelationshipsNotFound) {
 		t.Fatalf("expected error %v, got %v; rel: %+v", resource.ErrRelationshipsNotFound, err, rel)
 	}
-	if rel, err := inv.GetRelationships("bar", "foo", nil); !errors.Is(err, resource.ErrRelationshipsNotFound) {
+	rel, err = inv.GetRelationships(
+		&resourcev1.ResourceRef{TypeUrl: "test", Name: "bar"},
+		&resourcev1.ResourceRef{TypeUrl: "test", Name: "foo"},
+		nil,
+	)
+	if !errors.Is(err, resource.ErrRelationshipsNotFound) {
 		t.Fatalf("expected error %v, got %v; rel: %+v", resource.ErrRelationshipsNotFound, err, rel)
 	}
-	if _, err := inv.GetRelationships("bar", "baz", nil); err != nil {
+	_, err = inv.GetRelationships(
+		&resourcev1.ResourceRef{TypeUrl: "test", Name: "bar"},
+		&resourcev1.ResourceRef{TypeUrl: "test", Name: "baz"},
+		nil,
+	)
+	if err != nil {
 		t.Fatalf("expected bar->baz relationship to exist, got %v", err)
 	}
 }
 
 func TestInventory_DeleteResource_NoRelationships(t *testing.T) {
-	inv, err := store.New()
+	inv, err := New()
 	if err != nil {
 		t.Fatalf("failed to create inventory: %v", err)
 	}
@@ -393,15 +470,15 @@ func TestInventory_DeleteResource_NoRelationships(t *testing.T) {
 			Name: "foo",
 		},
 	}
-	if err := inv.AddResource("test", rsrc); err != nil {
+	if err := inv.AddResource(rsrc); err != nil {
 		t.Fatalf("failed to add resource: %v", err)
 	}
 
-	if err := inv.DeleteResource("test"); err != nil {
+	if err := inv.DeleteResource(ref(rsrc)); err != nil {
 		t.Fatalf("failed to delete resource: %v", err)
 	}
 
-	if rsrc, err := inv.GetResource("test"); !errors.Is(err, resource.ErrResourceNotFound) {
+	if rsrc, err := inv.GetResource(ref(rsrc)); !errors.Is(err, resource.ErrResourceNotFound) {
 		t.Fatalf("expected error %v, got %v; rsrc: %+v", resource.ErrResourceNotFound, err, rsrc)
 	}
 }

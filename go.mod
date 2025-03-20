@@ -5,7 +5,7 @@ go 1.24
 toolchain go1.24.1
 
 require (
-	github.com/antimetal/apis v0.0.0-20250312152416-4dbc0544e5a2
+	github.com/antimetal/apis v0.0.0-20250319185115-90514d1dc3bb
 	github.com/aws/aws-sdk-go-v2/config v1.29.9
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.16.30
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.209.0
