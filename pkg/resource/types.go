@@ -23,14 +23,16 @@ type Store interface {
 	// If the resource does not exist, it will return ErrResourceNotFound.
 	GetResource(ref *resourcev1.ResourceRef) (*resourcev1.Resource, error)
 
-	// AddResource adds rsrc to the inventory located by name.
+	// AddResource adds rsrc to the inventory located by name and updates rsrc for
+	// created and updated timestamps.
 	// If a resource already exists with the same name and namespace, it will return an error.
-	AddResource(resource *resourcev1.Resource) error
+	AddResource(rsrc *resourcev1.Resource) error
 
 	// UpdateResource updates a resource located by name with rsrc.
-	// If a resource already exists with the same name, it will be merged with rsrc,
-	// otherwise a new resource will be add at name.
-	UpdateResource(resource *resourcev1.Resource) error
+	// If a resource already exists with the same namespace/name, it will be merged
+	// with rsrc and updates rsrc with updated at timestamp. Otherwise a new resource
+	// will be added and rsrc will be updated for created and updated timestamps.
+	UpdateResource(rsrc *resourcev1.Resource) error
 
 	// DeleteResource deletes the resource located by name.
 	// It also cascade deletes all relationships where the resource is the subject
@@ -66,7 +68,28 @@ type Store interface {
 	// AddRelationships adds rels to the inventory.
 	AddRelationships(rels ...*resourcev1.Relationship) error
 
+	// Subscribe returns a channel that will emit events on resource changes. An Event contains both
+	// the event type (add, update delete) etc. and a list of Objects. The Object values are protobuf
+	// clones of the original so they can be modified without modifiying the underlying resource.
+	//
+	// The returned channel will be closed when Close() is called. If Close()
+	// has already been called, then it will return a closed channel.
+	Subscribe(typeDef *resourcev1.TypeDescriptor) <-chan Event
+
 	// Close closes the inventory store.
 	// It should be idempotent - calling Close multiple times will close only once.
 	Close() error
+}
+
+type EventType string
+
+const (
+	EventTypeAdd    EventType = "ADD"
+	EventTypeUpdate EventType = "UPDATE"
+	EventTypeDelete EventType = "DELETE"
+)
+
+type Event struct {
+	Type EventType
+	Objs []*resourcev1.Object
 }

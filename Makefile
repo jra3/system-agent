@@ -63,7 +63,7 @@ TESTCOVERAGE_OUT ?= cover.out
 
 .PHONY: test
 test: manifests fmt vet ## Run tests.
-	go test ./... -coverprofile $(TESTCOVERAGE_OUT)
+	go test ./... -v -coverprofile $(TESTCOVERAGE_OUT) -timeout 30s
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter & yamllint.

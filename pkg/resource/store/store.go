@@ -8,10 +8,12 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	resourcev1 "github.com/antimetal/apis/gengo/resource/v1"
 	badger "github.com/dgraph-io/badger/v4"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/antimetal/agent/pkg/errors"
@@ -36,6 +38,12 @@ var (
 	predicateIdx    = keyPart("rel-predicate")
 )
 
+type subscriber struct {
+	mu      sync.Mutex
+	typeDef *resourcev1.TypeDescriptor
+	ch      chan resource.Event
+}
+
 // Store is a simple store for resources and their relationships.
 // Resources are objects that represent a type of workload running on the system
 // or cloud resource (e.g. Kubernetes Pod, AWS EC2 instance, etc).
@@ -43,29 +51,48 @@ var (
 //
 // Resources can also have relationships with other resources. Relationships are
 // represented by a RDF triplet with a subject, predicate, and object.
-type Store struct {
-	mu sync.RWMutex
+type store struct {
+	mu     sync.RWMutex
+	wg     sync.WaitGroup
+	closed bool
 
-	store *badger.DB
+	store           *badger.DB
+	opGauge         *atomic.Int32
+	eventRouter     chan resource.Event
+	stopEventRouter chan struct{}
+	subscribers     []*subscriber
 }
 
 // New creates a new Store.
-func New() (*Store, error) {
+func New() (*store, error) {
 	db, err := badger.Open(badger.DefaultOptions("").WithInMemory(true))
 	if err != nil {
 		return nil, err
 	}
-	inv := &Store{
-		store: db,
+	s := &store{
+		store:           db,
+		opGauge:         &atomic.Int32{},
+		eventRouter:     make(chan resource.Event),
+		stopEventRouter: make(chan struct{}),
+		subscribers:     make([]*subscriber, 0),
 	}
-	return inv, nil
+	go s.startEventRouter()
+	return s, nil
 }
 
-// AddResource adds rsrc to the resource store.
-// If a resource already exists, it will return an error.
-func (s *Store) AddResource(rsrc *resourcev1.Resource) error {
+// AddResource adds rsrc to the inventory located by name and updates rsrc for
+// created and updated timestamps.
+// If a resource already exists with the same name and namespace, it will return an error.
+func (s *store) AddResource(rsrc *resourcev1.Resource) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.closed {
+		return fmt.Errorf("store is closed")
+	}
+
+	s.opGauge.Add(1)
+	defer s.opGauge.Add(-1)
 
 	r, err := encodeResourceKey(ref(rsrc))
 	if err != nil {
@@ -73,7 +100,8 @@ func (s *Store) AddResource(rsrc *resourcev1.Resource) error {
 	}
 	key := buildKey(resourceKey, []byte(r))
 
-	return s.store.Update(func(txn *badger.Txn) error {
+	var objAny *anypb.Any
+	err = s.store.Update(func(txn *badger.Txn) error {
 		_, err := txn.Get(key)
 		if err == nil {
 			return fmt.Errorf("resource already exists")
@@ -81,25 +109,43 @@ func (s *Store) AddResource(rsrc *resourcev1.Resource) error {
 		if !errors.Is(err, badger.ErrKeyNotFound) {
 			return fmt.Errorf("failed to read resource: %w", err)
 		}
-		rsrc = rsrc.DeepCopy()
 		now := timestamppb.Now()
 		rsrc.GetMetadata().CreatedAt = now
 		rsrc.GetMetadata().UpdatedAt = now
-		data, err := proto.Marshal(rsrc)
+		objAny, err = anypb.New(rsrc)
 		if err != nil {
 			return fmt.Errorf("failed to marshal resource: %w", err)
 		}
 
-		return txn.Set(key, data)
+		return txn.Set(key, objAny.GetValue())
 	})
+	if err != nil {
+		return fmt.Errorf("failed to add resource: %w", err)
+	}
+	s.eventRouter <- resource.Event{
+		Type: resource.EventTypeAdd,
+		Objs: []*resourcev1.Object{{
+			Type:   rsrc.GetType(),
+			Object: objAny,
+		}},
+	}
+	return nil
 }
 
-// UpdateResource updates rsrc in the resource store.
-// If the resource already exists, it will be merged with rsrc,
-// otherwise a new resource will be add at name.
-func (s *Store) UpdateResource(rsrc *resourcev1.Resource) error {
+// UpdateResource updates a resource located by name with rsrc.
+// If a resource already exists with the same namespace/name, it will be merged
+// with rsrc and updates rsrc with updated at timestamp. Otherwise a new resource
+// will be added and rsrc will be updated for created and updated timestamps.
+func (s *store) UpdateResource(rsrc *resourcev1.Resource) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.closed {
+		return fmt.Errorf("store is closed")
+	}
+
+	s.opGauge.Add(1)
+	defer s.opGauge.Add(-1)
 
 	r, err := encodeResourceKey(ref(rsrc))
 	if err != nil {
@@ -107,52 +153,68 @@ func (s *Store) UpdateResource(rsrc *resourcev1.Resource) error {
 	}
 	key := buildKey(resourceKey, []byte(r))
 
-	return s.store.Update(func(txn *badger.Txn) error {
+	var objAny *anypb.Any
+	err = s.store.Update(func(txn *badger.Txn) error {
 		item, err := txn.Get(key)
 		// If the resource does not exist, create it
 		if errors.Is(err, badger.ErrKeyNotFound) {
 			now := timestamppb.Now()
 			rsrc.GetMetadata().CreatedAt = now
 			rsrc.GetMetadata().UpdatedAt = now
-			data, err := proto.Marshal(rsrc)
+			objAny, err := anypb.New(rsrc)
 			if err != nil {
 				return fmt.Errorf("failed to marshal resource: %w", err)
 			}
-			return txn.Set(key, data)
+			return txn.Set(key, objAny.GetValue())
 		}
 		if err != nil {
 			return fmt.Errorf("failed to read resource: %w", err)
 		}
-		rsrc.GetMetadata().UpdatedAt = timestamppb.Now()
 		err = item.Value(func(val []byte) error {
 			r := &resourcev1.Resource{}
 			err := proto.Unmarshal(val, r)
 			if err != nil {
 				return fmt.Errorf("failed to unmarshal resource: %w", err)
 			}
-			rsrc := rsrc.DeepCopy()
-			r.Type = rsrc.Type
-			r.Metadata = rsrc.Metadata
-			r.Spec = rsrc.Spec
-			r.GetMetadata().UpdatedAt = timestamppb.Now()
-			data, err := proto.Marshal(r)
+			rsrc.GetMetadata().UpdatedAt = timestamppb.Now()
+			proto.Merge(r, rsrc)
+			rsrc = r
+			objAny, err := anypb.New(r)
 			if err != nil {
 				return fmt.Errorf("failed to marshal resource: %w", err)
 			}
-			return txn.Set(key, data)
+			return txn.Set(key, objAny.GetValue())
 		})
 		if err != nil {
 			return fmt.Errorf("failed to update resource: %w", err)
 		}
 		return nil
 	})
+	if err != nil {
+		return fmt.Errorf("failed to update resource: %w", err)
+	}
+	s.eventRouter <- resource.Event{
+		Type: resource.EventTypeUpdate,
+		Objs: []*resourcev1.Object{{
+			Type:   rsrc.GetType(),
+			Object: objAny,
+		}},
+	}
+	return nil
 }
 
 // GetResource returns the resource identified by ref.
 // If the resource does not exist, it will return ErrResourceNotFound.
-func (s *Store) GetResource(ref *resourcev1.ResourceRef) (*resourcev1.Resource, error) {
+func (s *store) GetResource(ref *resourcev1.ResourceRef) (*resourcev1.Resource, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, fmt.Errorf("store is closed")
+	}
+
+	s.opGauge.Add(1)
+	defer s.opGauge.Add(-1)
 
 	r, err := encodeResourceKey(ref)
 	if err != nil {
@@ -182,16 +244,23 @@ func (s *Store) GetResource(ref *resourcev1.ResourceRef) (*resourcev1.Resource, 
 // DeleteResource deletes the resource identfied by ref.
 // It also cascade deletes all relationships where the resource is the subject
 // or object.
-func (s *Store) DeleteResource(ref *resourcev1.ResourceRef) error {
+func (s *store) DeleteResource(ref *resourcev1.ResourceRef) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.closed {
+		return fmt.Errorf("store is closed")
+	}
+
+	s.opGauge.Add(1)
+	defer s.opGauge.Add(-1)
 
 	r, err := encodeResourceKey(ref)
 	if err != nil {
 		return fmt.Errorf("failed to encode resource key: %w", err)
 	}
 
-	return s.store.Update(func(txn *badger.Txn) error {
+	err = s.store.Update(func(txn *badger.Txn) error {
 		delObjs := make([]objKey, 0)
 
 		// 1. Delete all relationships where resource is the subject
@@ -240,10 +309,36 @@ func (s *Store) DeleteResource(ref *resourcev1.ResourceRef) error {
 		// 4. Finally delete the actual resource
 		return txn.Delete(buildKey(resourceKey, []byte(r)))
 	})
+	if err != nil {
+		return fmt.Errorf("failed to delete resource: %w", err)
+	}
+	rsrc := &resourcev1.Resource{
+		Type: &resourcev1.TypeDescriptor{
+			Kind: string((&resourcev1.Resource{}).ProtoReflect().Descriptor().Name()),
+			Type: ref.TypeUrl,
+		},
+		Metadata: &resourcev1.ResourceMeta{
+			Name:      ref.Name,
+			Namespace: ref.Namespace,
+			DeletedAt: timestamppb.Now(),
+		},
+	}
+	objAny, err := anypb.New(rsrc)
+	if err != nil {
+		return fmt.Errorf("failed to marshal resource: %w", err)
+	}
+	s.eventRouter <- resource.Event{
+		Type: resource.EventTypeDelete,
+		Objs: []*resourcev1.Object{{
+			Type:   rsrc.GetType(),
+			Object: objAny,
+		}},
+	}
+	return nil
 }
 
 // AddRelationships adds rels to the inventory.
-func (s *Store) AddRelationships(rels ...*resourcev1.Relationship) error {
+func (s *store) AddRelationships(rels ...*resourcev1.Relationship) error {
 	for _, rel := range rels {
 		if rel.GetPredicate() == nil {
 			return fmt.Errorf("predicate cannot be nil")
@@ -262,15 +357,23 @@ func (s *Store) AddRelationships(rels ...*resourcev1.Relationship) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return s.store.Update(func(txn *badger.Txn) error {
-		for _, rel := range rels {
+	if s.closed {
+		return fmt.Errorf("store is closed")
+	}
+
+	s.opGauge.Add(1)
+	defer s.opGauge.Add(-1)
+
+	objs := make([]*resourcev1.Object, len(rels))
+	err := s.store.Update(func(txn *badger.Txn) error {
+		for i, rel := range rels {
 			// 1. Write the relationship object
-			data, err := proto.Marshal(rel)
+			objAny, err := anypb.New(rel)
 			if err != nil {
 				return fmt.Errorf("failed to marshal relationship: %w", err)
 			}
-			h := sha256.Sum256(data)
-			if err := txn.Set(buildKey(relationshipKey, h[:]), data); err != nil {
+			h := sha256.Sum256(objAny.GetValue())
+			if err := txn.Set(buildKey(relationshipKey, h[:]), objAny.GetValue()); err != nil {
 				return fmt.Errorf("failed to write relationship: %w", err)
 			}
 
@@ -298,9 +401,26 @@ func (s *Store) AddRelationships(rels ...*resourcev1.Relationship) error {
 			if err := addObjKeyToIndex(txn, subjectIdxKey, h[:]); err != nil {
 				return fmt.Errorf("failed to update subject index: %w", err)
 			}
+
+			objs[i] = &resourcev1.Object{
+				Type:   rel.GetType(),
+				Object: objAny,
+			}
 		}
 		return nil
 	})
+	if err != nil {
+		return fmt.Errorf("failed to add relationships: %w", err)
+	}
+
+	// send objects individually so that it can be filtered downstream
+	for _, obj := range objs {
+		s.eventRouter <- resource.Event{
+			Type: resource.EventTypeAdd,
+			Objs: []*resourcev1.Object{obj},
+		}
+	}
+	return nil
 }
 
 // GetRelationships returns all relationships that match the combination subject, object,
@@ -327,9 +447,16 @@ func (s *Store) AddRelationships(rels ...*resourcev1.Relationship) error {
 //     &resourcev1.ResourceRef{TypeUrl: "type", Name: "bar"},
 //     &ConnectedTo{})
 //     returns all ConnectedTo relationships between subject "foo" and object "bar".
-func (s *Store) GetRelationships(subject, object *resourcev1.ResourceRef, predicateT proto.Message) ([]*resourcev1.Relationship, error) {
+func (s *store) GetRelationships(subject, object *resourcev1.ResourceRef, predicateT proto.Message) ([]*resourcev1.Relationship, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, fmt.Errorf("store is closed")
+	}
+
+	s.opGauge.Add(1)
+	defer s.opGauge.Add(-1)
 
 	var rels []*resourcev1.Relationship
 
@@ -392,10 +519,134 @@ func (s *Store) GetRelationships(subject, object *resourcev1.ResourceRef, predic
 	return rels, err
 }
 
+// Subscribe returns a channel that will emit events on resource changes. An Event contains both
+// the event type (add, update delete) etc. and a list of Objects. The Object values are protobuf
+// clones of the original so they can be modified without modifiying the underlying resource.
+//
+// The returned channel will be closed when Close() is called. If Close() has already been called,
+// then it will return a closed channel.
+func (s *store) Subscribe(typeDef *resourcev1.TypeDescriptor) <-chan resource.Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ch := make(chan resource.Event)
+	if s.closed {
+		close(ch)
+		return ch
+	}
+	subscriber := &subscriber{
+		typeDef: typeDef,
+		ch:      ch,
+	}
+	s.subscribers = append(s.subscribers, subscriber)
+	go s.sendInitialObjects(subscriber)
+	return ch
+}
+
+func (s *store) sendInitialObjects(subscriber *subscriber) {
+	objs := make([]*resourcev1.Object, 0)
+	_ = s.store.View(func(txn *badger.Txn) error {
+		it := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer it.Close()
+		for it.Seek(buildKey(resourceKey)); it.ValidForPrefix(buildKey(resourceKey)); it.Next() {
+			item := it.Item()
+			err := item.Value(func(val []byte) error {
+				r := &resourcev1.Resource{}
+				err := proto.Unmarshal(val, r)
+				if err != nil {
+					return fmt.Errorf("failed to unmarshal resource: %w", err)
+				}
+				objs = append(objs, &resourcev1.Object{
+					Type: r.GetType(),
+					Object: &anypb.Any{
+						TypeUrl: fmt.Sprintf("%s/%s", "type.googleapis.com", r.GetType().GetType()),
+						Value:   val,
+					},
+				})
+				return nil
+			})
+			if err != nil {
+				continue
+			}
+		}
+		for it.Seek(buildKey(relationshipKey)); it.ValidForPrefix(buildKey(relationshipKey)); it.Next() {
+			item := it.Item()
+			err := item.Value(func(val []byte) error {
+				rel := &resourcev1.Relationship{}
+				err := proto.Unmarshal(val, rel)
+				if err != nil {
+					return fmt.Errorf("failed to unmarshal relationship: %w", err)
+				}
+				objs = append(objs, &resourcev1.Object{
+					Type:   rel.GetType(),
+					Object: &anypb.Any{Value: val},
+				})
+				return nil
+			})
+			if err != nil {
+				continue
+			}
+		}
+		return nil
+	})
+	if len(objs) > 0 {
+		subscriber.mu.Lock()
+		subscriber.ch <- resource.Event{
+			Type: resource.EventTypeAdd,
+			Objs: objs,
+		}
+		subscriber.mu.Unlock()
+	}
+}
+
 // Close closes the inventory store.
 // It is idempotent - calling Close multiple times will close only once.
-func (s *Store) Close() error {
-	return s.store.Close()
+func (s *store) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	close(s.stopEventRouter)
+	s.wg.Wait()
+	err := s.store.Close()
+	s.closed = true
+	return err
+}
+
+func (s *store) startEventRouter() {
+	s.wg.Add(1)
+	defer s.wg.Done()
+
+	for {
+		select {
+		case e := <-s.eventRouter:
+			if len(e.Objs) == 0 {
+				continue
+			}
+			for _, subscriber := range s.subscribers {
+				if subscriber.typeDef != nil &&
+					subscriber.typeDef.GetKind() != e.Objs[0].GetType().GetKind() &&
+					subscriber.typeDef.GetType() != e.Objs[0].GetType().GetType() {
+					continue
+				}
+				subscriber.ch <- e
+			}
+		case <-s.stopEventRouter:
+			for {
+				if s.opGauge.Load() == 0 {
+					close(s.eventRouter)
+					break
+				}
+			}
+			for _, subscriber := range s.subscribers {
+				subscriber.mu.Lock()
+				close(subscriber.ch)
+				subscriber.mu.Unlock()
+			}
+			return
+		}
+	}
 }
 
 func buildKey(parts ...keyPart) []byte {

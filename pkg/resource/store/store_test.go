@@ -1,6 +1,8 @@
 package store
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/antimetal/agent/pkg/errors"
@@ -10,7 +12,7 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
-func TestInventory_AddResource(t *testing.T) {
+func TestStore_AddResource(t *testing.T) {
 	inv, err := New()
 	if err != nil {
 		t.Fatalf("failed to create inventory: %v", err)
@@ -54,7 +56,7 @@ func TestInventory_AddResource(t *testing.T) {
 	}
 }
 
-func TestInventory_UpdateResourceNewResource(t *testing.T) {
+func TestStore_UpdateResourceNewResource(t *testing.T) {
 	inv, err := New()
 	if err != nil {
 		t.Fatalf("failed to create inventory: %v", err)
@@ -98,7 +100,7 @@ func TestInventory_UpdateResourceNewResource(t *testing.T) {
 	}
 }
 
-func TestInventory_UpdateResource(t *testing.T) {
+func TestStore_UpdateResource(t *testing.T) {
 	inv, err := New()
 	if err != nil {
 		t.Fatalf("failed to create inventory: %v", err)
@@ -123,30 +125,46 @@ func TestInventory_UpdateResource(t *testing.T) {
 		t.Fatalf("failed to get resource: %v", err)
 	}
 
-	r.Metadata.Region = "us-east-1"
-	if err := inv.UpdateResource(r); err != nil {
+	r2 := &resourcev1.Resource{
+		Type: &resourcev1.TypeDescriptor{
+			Type: "foo",
+		},
+		Metadata: &resourcev1.ResourceMeta{
+			Name:   "test",
+			Region: "us-east-1",
+		},
+	}
+	if err := inv.UpdateResource(r2); err != nil {
 		t.Fatalf("failed to update resource: %v", err)
 	}
 
-	r2, err := inv.GetResource(ref(rsrc))
-	if err != nil {
-		t.Fatalf("failed to get resource: %v", err)
-	}
-
-	if r2.Metadata.Region != "us-east-1" {
-		t.Fatalf("expected region us-east-1, got %q", r.Metadata.Name)
-	}
-	if r.Type.Type != r2.Type.Type {
-		t.Fatalf("expected type %q, got %q", rsrc.Type.Type, r.Type.Type)
-	}
 	if !r2.Metadata.UpdatedAt.AsTime().After(r.Metadata.UpdatedAt.AsTime()) {
 		t.Fatalf("expected update time to be updated: r: %v, r2: %v",
 			r.Metadata.UpdatedAt.AsTime(), r2.Metadata.UpdatedAt.AsTime(),
 		)
 	}
+
+	r3, err := inv.GetResource(ref(rsrc))
+	if err != nil {
+		t.Fatalf("failed to get resource after update: %v", err)
+	}
+	if r3.Metadata.Name != rsrc.Metadata.Name {
+		t.Fatalf("expected name %q, got %q", rsrc.Metadata.Name, r3.Metadata.Name)
+	}
+	if r3.Type.Type != rsrc.Type.Type {
+		t.Fatalf("expected type %q, got %q", rsrc.Type.Type, r3.Type.Type)
+	}
+	if r3.Metadata.Region != "us-east-1" {
+		t.Fatalf("expected region %q, got %q", "us-east-1", r3.Metadata.Region)
+	}
+	if r3.Metadata.UpdatedAt.AsTime().After(r2.Metadata.UpdatedAt.AsTime()) {
+		t.Fatalf("expected update time to be updated: r3: %v, r2: %v",
+			r3.Metadata.UpdatedAt.AsTime(), r2.Metadata.UpdatedAt.AsTime(),
+		)
+	}
 }
 
-func TestInventory_GetRelationships(t *testing.T) {
+func TestStore_GetRelationships(t *testing.T) {
 	type testCase struct {
 		name              string
 		subject           *resourcev1.ResourceRef
@@ -358,7 +376,7 @@ func TestInventory_GetRelationships(t *testing.T) {
 	}
 }
 
-func TestInventory_DeleteResource_CascadeDelete(t *testing.T) {
+func TestStore_DeleteResource_CascadeDelete(t *testing.T) {
 	inv, err := New()
 	if err != nil {
 		t.Fatalf("failed to create inventory: %v", err)
@@ -455,7 +473,7 @@ func TestInventory_DeleteResource_CascadeDelete(t *testing.T) {
 	}
 }
 
-func TestInventory_DeleteResource_NoRelationships(t *testing.T) {
+func TestStore_DeleteResource_NoRelationships(t *testing.T) {
 	inv, err := New()
 	if err != nil {
 		t.Fatalf("failed to create inventory: %v", err)
@@ -480,5 +498,105 @@ func TestInventory_DeleteResource_NoRelationships(t *testing.T) {
 
 	if rsrc, err := inv.GetResource(ref(rsrc)); !errors.Is(err, resource.ErrResourceNotFound) {
 		t.Fatalf("expected error %v, got %v; rsrc: %+v", resource.ErrResourceNotFound, err, rsrc)
+	}
+}
+
+func TestStore_Subscribe(t *testing.T) {
+	s, err := New()
+	if err != nil {
+		t.Fatalf("failed to create inventory: %v", err)
+	}
+
+	rsrc1 := &resourcev1.Resource{
+		Type: &resourcev1.TypeDescriptor{
+			Kind: "foo",
+			Type: "foo",
+		},
+		Metadata: &resourcev1.ResourceMeta{
+			Name: "rsrc1",
+		},
+	}
+	if err := s.AddResource(rsrc1); err != nil {
+		t.Fatalf("failed to add resource: %v", err)
+	}
+
+	rsrc2 := &resourcev1.Resource{
+		Type: &resourcev1.TypeDescriptor{
+			Kind: "foo",
+			Type: "bar",
+		},
+		Metadata: &resourcev1.ResourceMeta{
+			Name: "rscr2",
+		},
+	}
+	if err := s.AddResource(rsrc2); err != nil {
+		t.Fatalf("failed to add resource: %v", err)
+	}
+
+	rel := &resourcev1.Relationship{
+		Type: &resourcev1.TypeDescriptor{
+			Kind: "qux",
+			Type: "qux",
+		},
+		Subject: &resourcev1.ResourceRef{
+			TypeUrl: "foo",
+			Name:    "rscr1",
+		},
+		Object: &resourcev1.ResourceRef{
+			TypeUrl: "bar",
+			Name:    "rsrc2",
+		},
+		Predicate: &anypb.Any{
+			TypeUrl: "qux",
+		},
+	}
+	if err := s.AddRelationships(rel); err != nil {
+		t.Fatalf("failed to add relationship: %v", err)
+	}
+
+	err = s.UpdateResource(&resourcev1.Resource{
+		Type: &resourcev1.TypeDescriptor{
+			Kind: "foo",
+			Type: "foo",
+		},
+		Metadata: &resourcev1.ResourceMeta{
+			Name:   "bar",
+			Region: "us-east-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to update resource: %v", err)
+	}
+
+	objs := make(map[string]struct{})
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for event := range s.Subscribe(nil) {
+			for _, obj := range event.Objs {
+				k := fmt.Sprintf("%s/%s", obj.GetType().GetKind(), obj.GetType().GetType())
+				objs[k] = struct{}{}
+			}
+			if len(objs) == 3 {
+				return
+			}
+		}
+	}()
+
+	wg.Wait()
+	if err := s.Close(); err != nil {
+		t.Fatalf("failed to close inventory: %v", err)
+	}
+
+	if _, ok := objs["foo/foo"]; !ok {
+		t.Fatalf("expected resource %s to be in the event stream", "foo/foo")
+	}
+	if _, ok := objs["foo/bar"]; !ok {
+		t.Fatalf("expected resource %s to be in the event stream", "foo/bar")
+	}
+	if _, ok := objs["qux/qux"]; !ok {
+		t.Fatalf("expected relationship %s to be in the event stream", "qux/qux")
 	}
 }
