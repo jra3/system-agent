@@ -389,7 +389,7 @@ func genBase(clusterName string, obj object, owners ...object) (*resourcev1.Reso
 }
 
 func labelsToTags(labels map[string]string) []*resourcev1.Tag {
-	tags := make([]*resourcev1.Tag, len(labels))
+	tags := make([]*resourcev1.Tag, 0, len(labels))
 	for k, v := range labels {
 		tags = append(tags, &resourcev1.Tag{
 			Key:   k,

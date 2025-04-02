@@ -43,6 +43,7 @@ func (i *indexer) LoadClusterInfo(ctx context.Context, major string, minor strin
 	if err != nil {
 		return fmt.Errorf("failed to marshal cluster: %w", err)
 	}
+	i.clusterName = clusterName
 
 	return i.store.AddResource(&resourcev1.Resource{
 		Type: &resourcev1.TypeDescriptor{
