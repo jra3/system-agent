@@ -161,7 +161,7 @@ func (s *store) UpdateResource(rsrc *resourcev1.Resource) error {
 			now := timestamppb.Now()
 			rsrc.GetMetadata().CreatedAt = now
 			rsrc.GetMetadata().UpdatedAt = now
-			objAny, err := anypb.New(rsrc)
+			objAny, err = anypb.New(rsrc)
 			if err != nil {
 				return fmt.Errorf("failed to marshal resource: %w", err)
 			}
@@ -179,7 +179,7 @@ func (s *store) UpdateResource(rsrc *resourcev1.Resource) error {
 			rsrc.GetMetadata().UpdatedAt = timestamppb.Now()
 			proto.Merge(r, rsrc)
 			rsrc = r
-			objAny, err := anypb.New(r)
+			objAny, err = anypb.New(r)
 			if err != nil {
 				return fmt.Errorf("failed to marshal resource: %w", err)
 			}
