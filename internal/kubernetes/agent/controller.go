@@ -112,7 +112,7 @@ func (c *Controller) SetupWithManager(mgr manager.Manager) error {
 		cfg:              c.Config,
 		scheme:           mgr.GetScheme(),
 		provider:         c.Provider,
-		logger:           mgr.GetLogger().WithValues("controller", controllerName),
+		logger:           mgr.GetLogger().WithName(controllerName),
 		informerFactory:  mgr.GetCache(),
 		cacheSyncTimeout: cacheSyncTimeout,
 		indexer:          indexer,
@@ -202,13 +202,13 @@ func (c *controller) indexObjects(ctx context.Context) {
 	var err error
 	switch ev.typ {
 	case EventAdd:
-		c.logger.Info("adding object to index", "event", eventStr(ev.typ), "object", ev.obj)
+		c.logger.V(1).Info("adding object to index", "event", eventStr(ev.typ), "object", ev.obj)
 		err = c.indexer.Add(ctx, ev.obj)
 	case EventUpdate:
-		c.logger.Info("update object in index", "event", eventStr(ev.typ), "object", ev.obj)
+		c.logger.V(1).Info("update object in index", "event", eventStr(ev.typ), "object", ev.obj)
 		err = c.indexer.Update(ctx, ev.obj)
 	case EventDelete:
-		c.logger.Info("deleting object to index", "event", eventStr(ev.typ), "object", ev.obj)
+		c.logger.V(1).Info("deleting object to index", "event", eventStr(ev.typ), "object", ev.obj)
 		err = c.indexer.Delete(ctx, ev.obj)
 	default:
 		err = fmt.Errorf("unknown event type: %d", ev.typ)
@@ -268,7 +268,7 @@ func (c *controller) syncCache(ctx context.Context) error {
 			}
 
 			h := k8sCollectorHandler{
-				logger: c.logger.WithValues("GroupVersionKind", gvks),
+				logger: c.logger,
 				scheme: c.scheme,
 				queue:  c.queue,
 			}

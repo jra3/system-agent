@@ -61,9 +61,7 @@ func main() {
 	flag.BoolVar(&eksAutodiscover, "kubernetes-provider-eks-autodiscover", true,
 		"Autodiscover EKS cluster name")
 
-	opts := zap.Options{
-		Development: true,
-	}
+	opts := zap.Options{}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 

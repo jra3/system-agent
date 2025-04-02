@@ -42,7 +42,7 @@ func (h k8sCollectorHandler) OnDelete(obj any) {
 func (h k8sCollectorHandler) handle(ev eventType, obj any) {
 	k8sObj, ok := obj.(object)
 	if !ok {
-		h.logger.Error(fmt.Errorf("invalid object: %T", obj), "received invalid object")
+		h.logger.Error(fmt.Errorf("invalid object: %T", obj), "received invalid object", "object", obj)
 		return
 	}
 	// Reset the GroupVersionKind because TypeMeta gets cleared.
