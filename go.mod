@@ -5,14 +5,16 @@ go 1.24
 toolchain go1.24.1
 
 require (
-	github.com/antimetal/apis v0.0.0-20250319185115-90514d1dc3bb
+	github.com/antimetal/apis v0.0.0-20250331235307-92eb8a65740d
 	github.com/aws/aws-sdk-go-v2/config v1.29.9
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.16.30
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.209.0
+	github.com/cenkalti/backoff/v5 v5.0.2
 	github.com/dgraph-io/badger/v4 v4.6.0
 	github.com/go-logr/logr v1.4.2
 	github.com/gogo/protobuf v1.3.2
 	golang.org/x/sync v0.12.0
+	google.golang.org/grpc v1.69.4
 	google.golang.org/protobuf v1.36.5
 	k8s.io/api v0.32.3
 	k8s.io/apimachinery v0.32.3
@@ -81,6 +83,7 @@ require (
 	golang.org/x/text v0.23.0 // indirect
 	golang.org/x/time v0.11.0 // indirect
 	gomodules.xyz/jsonpatch/v2 v2.5.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20250106144421-5f5ef82da422 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.12.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

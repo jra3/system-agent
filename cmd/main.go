@@ -6,6 +6,9 @@ import (
 	"os"
 
 	"github.com/go-logr/logr"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -14,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	"github.com/antimetal/agent/internal/intake"
 	k8sagent "github.com/antimetal/agent/internal/kubernetes/agent"
 	"github.com/antimetal/agent/internal/kubernetes/cluster"
 	"github.com/antimetal/agent/internal/kubernetes/scheme"
@@ -24,6 +28,7 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 
 	// CLI Options
+	intakeAddr           string
 	metricsAddr          string
 	enableLeaderElection bool
 	probeAddr            string
@@ -38,6 +43,8 @@ var (
 )
 
 func main() {
+	flag.StringVar(&intakeAddr, "intake-address", "localhost:50051",
+		"The address of the cloud inventory intake service")
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080",
 		"The address the metric endpoint binds to. Set this to '0' to disable the metrics server")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081",
@@ -112,17 +119,41 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Shared resources
+	rsrcStore, err := store.New()
+	if err != nil {
+		setupLog.Error(err, "unable to create resource inventory")
+		os.Exit(1)
+	}
+
+	intakeConn, err := grpc.NewClient(intakeAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		setupLog.Error(err, "unable to connect to cloud inventory service")
+		os.Exit(1)
+	}
+
+	// Setup Intake Worker
+	intakeWorker, err := intake.NewWorker(rsrcStore,
+		intake.WithLogger(mgr.GetLogger().WithName("intake-worker")),
+		intake.WithGRPCConn(intakeConn),
+	)
+	if err != nil {
+		setupLog.Error(err, "unable to create intake worker")
+		os.Exit(1)
+	}
+	if err := mgr.Add(intakeWorker); err != nil {
+		setupLog.Error(err, "unable to register intake worker")
+		os.Exit(1)
+	}
+
 	// Setup Kubernetes Collector Controller
 	if enableK8sController {
 		providerOpts := getProviderOptions(setupLog.WithName("cluster-provider"))
 		provider, err := cluster.GetProvider(ctx, kubernetesProvider, providerOpts)
 		if err != nil {
 			setupLog.Error(err, "unable to determine cluster provider")
-			os.Exit(1)
-		}
-		rsrcStore, err := store.New()
-		if err != nil {
-			setupLog.Error(err, "unable to create resource inventory")
 			os.Exit(1)
 		}
 		ctrl := &k8sagent.Controller{
