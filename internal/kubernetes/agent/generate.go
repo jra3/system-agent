@@ -84,6 +84,12 @@ func genPod(store resource.Store, clusterName string, obj object, owners ...obje
 		return nil, nil, fmt.Errorf("failed to create resource and base relationships: %w", err)
 	}
 
+	objRef := &resourcev1.ResourceRef{
+		TypeUrl:   proto.MessageName(obj),
+		Name:      rsrc.GetMetadata().GetName(),
+		Namespace: rsrc.GetMetadata().GetNamespace(),
+	}
+
 	if podObj.Spec.NodeName != "" {
 		nodeRsrc, err := store.GetResource(&resourcev1.ResourceRef{
 			TypeUrl: proto.MessageName(&corev1.Node{}),
@@ -102,13 +108,46 @@ func genPod(store resource.Store, clusterName string, obj object, owners ...obje
 		}
 		rsrc.GetMetadata().Region = nodeRsrc.GetMetadata().Region
 		rsrc.GetMetadata().Zone = nodeRsrc.GetMetadata().Zone
+
+		nodeRef := &resourcev1.ResourceRef{
+			TypeUrl:   nodeRsrc.GetType().GetType(),
+			Name:      nodeRsrc.GetMetadata().GetName(),
+			Namespace: nodeRsrc.GetMetadata().GetNamespace(),
+		}
+
+		contains := &k8sv1.Contains{}
+		containsAny, err := anypb.New(contains)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to create predicate: %w", err)
+		}
+		containedBy := &k8sv1.ContainedBy{}
+		containedByAny, err := anypb.New(containedBy)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to create predicate: %w", err)
+		}
+
+		rels = append(rels,
+			&resourcev1.Relationship{
+				Type: &resourcev1.TypeDescriptor{
+					Kind: kindRelationship,
+					Type: proto.MessageName(contains),
+				},
+				Subject:   nodeRef,
+				Object:    objRef,
+				Predicate: containsAny,
+			},
+			&resourcev1.Relationship{
+				Type: &resourcev1.TypeDescriptor{
+					Kind: kindRelationship,
+					Type: proto.MessageName(containedBy),
+				},
+				Subject:   objRef,
+				Object:    nodeRef,
+				Predicate: containedByAny,
+			},
+		)
 	}
 
-	objRef := &resourcev1.ResourceRef{
-		TypeUrl:   proto.MessageName(obj),
-		Name:      rsrc.GetMetadata().GetName(),
-		Namespace: rsrc.GetMetadata().GetNamespace(),
-	}
 	for _, volume := range podObj.Spec.Volumes {
 		if volume.PersistentVolumeClaim != nil {
 			pvcRef := &resourcev1.ResourceRef{
