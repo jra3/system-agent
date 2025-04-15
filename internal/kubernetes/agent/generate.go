@@ -8,7 +8,7 @@ import (
 	"github.com/antimetal/agent/pkg/resource"
 	k8sv1 "github.com/antimetal/apis/gengo/kubernetes/v1"
 	resourcev1 "github.com/antimetal/apis/gengo/resource/v1"
-	"github.com/gogo/protobuf/proto"
+	gogoproto "github.com/gogo/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -85,14 +85,14 @@ func genPod(store resource.Store, clusterName string, obj object, owners ...obje
 	}
 
 	objRef := &resourcev1.ResourceRef{
-		TypeUrl:   proto.MessageName(obj),
+		TypeUrl:   gogoproto.MessageName(obj),
 		Name:      rsrc.GetMetadata().GetName(),
 		Namespace: rsrc.GetMetadata().GetNamespace(),
 	}
 
 	if podObj.Spec.NodeName != "" {
 		nodeRsrc, err := store.GetResource(&resourcev1.ResourceRef{
-			TypeUrl: proto.MessageName(&corev1.Node{}),
+			TypeUrl: gogoproto.MessageName(&corev1.Node{}),
 			Name:    podObj.Spec.NodeName,
 			Namespace: &resourcev1.Namespace{
 				Namespace: &resourcev1.Namespace_Kube{
@@ -130,7 +130,7 @@ func genPod(store resource.Store, clusterName string, obj object, owners ...obje
 			&resourcev1.Relationship{
 				Type: &resourcev1.TypeDescriptor{
 					Kind: kindRelationship,
-					Type: proto.MessageName(contains),
+					Type: string(contains.ProtoReflect().Descriptor().FullName()),
 				},
 				Subject:   nodeRef,
 				Object:    objRef,
@@ -139,7 +139,7 @@ func genPod(store resource.Store, clusterName string, obj object, owners ...obje
 			&resourcev1.Relationship{
 				Type: &resourcev1.TypeDescriptor{
 					Kind: kindRelationship,
-					Type: proto.MessageName(containedBy),
+					Type: string(containedBy.ProtoReflect().Descriptor().FullName()),
 				},
 				Subject:   objRef,
 				Object:    nodeRef,
@@ -151,7 +151,7 @@ func genPod(store resource.Store, clusterName string, obj object, owners ...obje
 	for _, volume := range podObj.Spec.Volumes {
 		if volume.PersistentVolumeClaim != nil {
 			pvcRef := &resourcev1.ResourceRef{
-				TypeUrl: proto.MessageName(&corev1.PersistentVolumeClaim{}),
+				TypeUrl: gogoproto.MessageName(&corev1.PersistentVolumeClaim{}),
 				Name:    volume.PersistentVolumeClaim.ClaimName,
 				Namespace: &resourcev1.Namespace{
 					Namespace: &resourcev1.Namespace_Kube{
@@ -176,7 +176,7 @@ func genPod(store resource.Store, clusterName string, obj object, owners ...obje
 				&resourcev1.Relationship{
 					Type: &resourcev1.TypeDescriptor{
 						Kind: kindRelationship,
-						Type: proto.MessageName(volumeMount),
+						Type: string(volumeMount.ProtoReflect().Descriptor().FullName()),
 					},
 					Subject:   pvcRef,
 					Object:    objRef,
@@ -185,7 +185,7 @@ func genPod(store resource.Store, clusterName string, obj object, owners ...obje
 				&resourcev1.Relationship{
 					Type: &resourcev1.TypeDescriptor{
 						Kind: kindRelationship,
-						Type: proto.MessageName(attachedTo),
+						Type: string(attachedTo.ProtoReflect().Descriptor().FullName()),
 					},
 					Subject:   objRef,
 					Object:    pvcRef,
@@ -231,12 +231,12 @@ func genPersistentVolumeClaim(clusterName string, obj object, owners ...object) 
 
 	if pvcObj.Spec.VolumeName != "" {
 		objRef := &resourcev1.ResourceRef{
-			TypeUrl:   proto.MessageName(obj),
+			TypeUrl:   gogoproto.MessageName(obj),
 			Name:      rsrc.GetMetadata().GetName(),
 			Namespace: rsrc.GetMetadata().GetNamespace(),
 		}
 		pvRef := &resourcev1.ResourceRef{
-			TypeUrl: proto.MessageName(&corev1.PersistentVolume{}),
+			TypeUrl: gogoproto.MessageName(&corev1.PersistentVolume{}),
 			Name:    pvcObj.Spec.VolumeName,
 			Namespace: &resourcev1.Namespace{
 				Namespace: &resourcev1.Namespace_Kube{
@@ -260,7 +260,7 @@ func genPersistentVolumeClaim(clusterName string, obj object, owners ...object) 
 			&resourcev1.Relationship{
 				Type: &resourcev1.TypeDescriptor{
 					Kind: kindRelationship,
-					Type: proto.MessageName(claimsFrom),
+					Type: string(claimsFrom.ProtoReflect().Descriptor().FullName()),
 				},
 				Subject:   objRef,
 				Object:    pvRef,
@@ -269,7 +269,7 @@ func genPersistentVolumeClaim(clusterName string, obj object, owners ...object) 
 			&resourcev1.Relationship{
 				Type: &resourcev1.TypeDescriptor{
 					Kind: kindRelationship,
-					Type: proto.MessageName(boundBy),
+					Type: string(boundBy.ProtoReflect().Descriptor().FullName()),
 				},
 				Subject:   pvRef,
 				Object:    objRef,
@@ -314,7 +314,7 @@ func genBase(clusterName string, obj object, owners ...object) (*resourcev1.Reso
 	rsrc := &resourcev1.Resource{
 		Type: &resourcev1.TypeDescriptor{
 			Kind: kindResource,
-			Type: proto.MessageName(obj),
+			Type: gogoproto.MessageName(obj),
 		},
 		Metadata: &resourcev1.ResourceMeta{
 			Provider:   resourcev1.Provider_PROVIDER_KUBERNETES,
@@ -331,7 +331,7 @@ func genBase(clusterName string, obj object, owners ...object) (*resourcev1.Reso
 			Tags: labelsToTags(obj.GetLabels()),
 		},
 		Spec: &anypb.Any{
-			TypeUrl: proto.MessageName(obj),
+			TypeUrl: gogoproto.MessageName(obj),
 			Value:   data,
 		},
 	}
@@ -361,7 +361,7 @@ func genBase(clusterName string, obj object, owners ...object) (*resourcev1.Reso
 		&resourcev1.Relationship{
 			Type: &resourcev1.TypeDescriptor{
 				Kind: kindRelationship,
-				Type: proto.MessageName(contains),
+				Type: string(contains.ProtoReflect().Descriptor().FullName()),
 			},
 			Subject:   clusterRef,
 			Object:    objRef,
@@ -370,7 +370,7 @@ func genBase(clusterName string, obj object, owners ...object) (*resourcev1.Reso
 		&resourcev1.Relationship{
 			Type: &resourcev1.TypeDescriptor{
 				Kind: kindRelationship,
-				Type: proto.MessageName(containedBy),
+				Type: string(containedBy.ProtoReflect().Descriptor().FullName()),
 			},
 			Subject:   objRef,
 			Object:    clusterRef,
@@ -381,7 +381,7 @@ func genBase(clusterName string, obj object, owners ...object) (*resourcev1.Reso
 	// Add relationships to the resource owners if any.
 	for _, owner := range owners {
 		ownerRef := &resourcev1.ResourceRef{
-			TypeUrl: proto.MessageName(owner),
+			TypeUrl: gogoproto.MessageName(owner),
 			Name:    owner.GetName(),
 			Namespace: &resourcev1.Namespace{
 				Namespace: &resourcev1.Namespace_Kube{
@@ -406,7 +406,7 @@ func genBase(clusterName string, obj object, owners ...object) (*resourcev1.Reso
 			&resourcev1.Relationship{
 				Type: &resourcev1.TypeDescriptor{
 					Kind: kindRelationship,
-					Type: proto.MessageName(owns),
+					Type: string(owns.ProtoReflect().Descriptor().FullName()),
 				},
 				Subject:   ownerRef,
 				Object:    objRef,
@@ -415,7 +415,7 @@ func genBase(clusterName string, obj object, owners ...object) (*resourcev1.Reso
 			&resourcev1.Relationship{
 				Type: &resourcev1.TypeDescriptor{
 					Kind: kindRelationship,
-					Type: proto.MessageName(ownedBy),
+					Type: string(ownedBy.ProtoReflect().Descriptor().FullName()),
 				},
 				Subject:   objRef,
 				Object:    ownerRef,
