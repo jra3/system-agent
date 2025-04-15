@@ -25,7 +25,7 @@ import (
 )
 
 var (
-	setupLog = ctrl.Log.WithName("setup")
+	setupLog logr.Logger
 
 	// CLI Options
 	intakeAddr           string
@@ -42,7 +42,7 @@ var (
 	eksAutodiscover      bool
 )
 
-func main() {
+func init() {
 	flag.StringVar(&intakeAddr, "intake-address", "localhost:50051",
 		"The address of the cloud inventory intake service")
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080",
@@ -73,7 +73,10 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+	setupLog = ctrl.Log.WithName("setup")
+}
 
+func main() {
 	ctx := ctrl.SetupSignalHandler()
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
