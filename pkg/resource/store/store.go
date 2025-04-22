@@ -133,8 +133,9 @@ func (s *store) AddResource(rsrc *resourcev1.Resource) error {
 }
 
 // UpdateResource updates a resource located by name with rsrc.
-// If a resource already exists with the same namespace/name, it will be merged
-// with rsrc and updates rsrc with updated at timestamp. Otherwise a new resource
+// If a resource already exists with the same namespace/name, it will be replaced
+// with rsrc and updates rsrc with updated at timestamp. The created at timestamp from the
+// originally added resource is preserved. Otherwise a new resource
 // will be added and rsrc will be updated for created and updated timestamps.
 func (s *store) UpdateResource(rsrc *resourcev1.Resource) error {
 	s.mu.Lock()
@@ -176,10 +177,9 @@ func (s *store) UpdateResource(rsrc *resourcev1.Resource) error {
 			if err != nil {
 				return fmt.Errorf("failed to unmarshal resource: %w", err)
 			}
+			rsrc.GetMetadata().CreatedAt = r.Metadata.GetCreatedAt()
 			rsrc.GetMetadata().UpdatedAt = timestamppb.Now()
-			proto.Merge(r, rsrc)
-			rsrc = r
-			objAny, err = anypb.New(r)
+			objAny, err = anypb.New(rsrc)
 			if err != nil {
 				return fmt.Errorf("failed to marshal resource: %w", err)
 			}

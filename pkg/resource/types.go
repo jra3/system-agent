@@ -29,8 +29,9 @@ type Store interface {
 	AddResource(rsrc *resourcev1.Resource) error
 
 	// UpdateResource updates a resource located by name with rsrc.
-	// If a resource already exists with the same namespace/name, it will be merged
-	// with rsrc and updates rsrc with updated at timestamp. Otherwise a new resource
+	// If a resource already exists with the same namespace/name, it will be replaced
+	// with rsrc and updates rsrc with updated at timestamp. The created at timestamp from the
+	// originally added resource is preserved. Otherwise a new resource
 	// will be added and rsrc will be updated for created and updated timestamps.
 	UpdateResource(rsrc *resourcev1.Resource) error
 
