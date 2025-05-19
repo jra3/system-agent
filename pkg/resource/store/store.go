@@ -40,7 +40,6 @@ var (
 )
 
 type subscriber struct {
-	mu      sync.Mutex
 	typeDef *resourcev1.TypeDescriptor
 	ch      chan resource.Event
 }
@@ -591,12 +590,10 @@ func (s *store) sendInitialObjects(subscriber *subscriber) {
 		return nil
 	})
 	if len(objs) > 0 {
-		subscriber.mu.Lock()
 		subscriber.ch <- resource.Event{
 			Type: resource.EventTypeAdd,
 			Objs: objs,
 		}
-		subscriber.mu.Unlock()
 	}
 }
 
@@ -649,9 +646,7 @@ func (s *store) startEventRouter() {
 				}
 			}
 			for _, subscriber := range s.subscribers {
-				subscriber.mu.Lock()
 				close(subscriber.ch)
-				subscriber.mu.Unlock()
 			}
 			return
 		}
