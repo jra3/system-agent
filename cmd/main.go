@@ -29,6 +29,7 @@ var (
 
 	// CLI Options
 	intakeAddr           string
+	intakeAPIKey         string
 	metricsAddr          string
 	enableLeaderElection bool
 	probeAddr            string
@@ -45,6 +46,9 @@ var (
 func init() {
 	flag.StringVar(&intakeAddr, "intake-address", "localhost:50051",
 		"The address of the cloud inventory intake service")
+	flag.StringVar(&intakeAPIKey, "intake-api-key", "",
+		"The API key to use upload resources",
+	)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080",
 		"The address the metric endpoint binds to. Set this to '0' to disable the metrics server")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081",
@@ -141,6 +145,7 @@ func main() {
 	intakeWorker, err := intake.NewWorker(rsrcStore,
 		intake.WithLogger(mgr.GetLogger().WithName("intake-worker")),
 		intake.WithGRPCConn(intakeConn),
+		intake.WithAPIKey(intakeAPIKey),
 	)
 	if err != nil {
 		setupLog.Error(err, "unable to create intake worker")

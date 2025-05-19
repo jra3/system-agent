@@ -11,7 +11,12 @@ import (
 	"github.com/go-logr/logr"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+)
+
+const (
+	headerAuthorize = "authorization"
 )
 
 var retryableCodes = []codes.Code{
@@ -22,6 +27,7 @@ var retryableCodes = []codes.Code{
 }
 
 type worker struct {
+	apiKey string
 	client intakev1.IntakeServiceClient
 	store  resource.Store
 	logger logr.Logger
@@ -41,6 +47,12 @@ func WithGRPCConn(conn *grpc.ClientConn) WorkerOpts {
 func WithLogger(logger logr.Logger) WorkerOpts {
 	return func(w *worker) {
 		w.logger = logger
+	}
+}
+
+func WithAPIKey(apiKey string) WorkerOpts {
+	return func(w *worker) {
+		w.apiKey = apiKey
 	}
 }
 
@@ -73,7 +85,9 @@ loop:
 			if w.stream == nil {
 				for {
 					_, err := backoff.Retry(ctx, func() (bool, error) {
-						streamCtx := context.Background()
+						streamCtx := metadata.NewOutgoingContext(
+							context.Background(), metadata.Pairs(headerAuthorize, fmt.Sprintf("bearer %s", w.apiKey)),
+						)
 						stream, err := w.client.Delta(streamCtx)
 						if err != nil {
 							w.logger.Error(err, "failed to create intake stream, retrying...")
