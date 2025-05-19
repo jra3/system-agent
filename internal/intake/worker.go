@@ -3,6 +3,7 @@ package intake
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/cenkalti/backoff/v5"
 
@@ -10,21 +11,12 @@ import (
 	intakev1 "github.com/antimetal/apis/gengo/service/resource/v1"
 	"github.com/go-logr/logr"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/status"
 )
 
 const (
 	headerAuthorize = "authorization"
 )
-
-var retryableCodes = []codes.Code{
-	codes.Canceled,
-	codes.DeadlineExceeded,
-	codes.Unavailable,
-	codes.Aborted,
-}
 
 type worker struct {
 	apiKey string
@@ -71,65 +63,57 @@ func NewWorker(store resource.Store, opts ...WorkerOpts) (*worker, error) {
 }
 
 func (w *worker) Start(ctx context.Context) error {
-	eventSub := w.store.Subscribe(nil)
 loop:
-	for {
-		select {
-		case <-ctx.Done():
-			break loop
-		case event, ok := <-eventSub:
-			if !ok {
-				// resource store is closed so start the shutdown process
-				break loop
-			}
-			if w.stream == nil {
-				for {
-					_, err := backoff.Retry(ctx, func() (bool, error) {
-						streamCtx := metadata.NewOutgoingContext(
-							context.Background(), metadata.Pairs(headerAuthorize, fmt.Sprintf("bearer %s", w.apiKey)),
-						)
-						stream, err := w.client.Delta(streamCtx)
-						if err != nil {
-							w.logger.Error(err, "failed to create intake stream, retrying...")
-							return false, err
-						}
-						w.stream = stream
-						return true, nil
-					}, backoff.WithBackOff(backoff.NewExponentialBackOff()))
-					if err == nil {
-						break
+	for event := range w.store.Subscribe(nil) {
+		if w.stream == nil {
+			for {
+				_, err := backoff.Retry(ctx, func() (bool, error) {
+					streamCtx := metadata.NewOutgoingContext(
+						context.Background(), metadata.Pairs(headerAuthorize, fmt.Sprintf("bearer %s", w.apiKey)),
+					)
+					stream, err := w.client.Delta(streamCtx)
+					if err != nil {
+						w.logger.Error(err, "failed to create intake stream, retrying...")
+						return false, err
 					}
+					w.stream = stream
+					return true, nil
+				}, backoff.WithBackOff(backoff.NewExponentialBackOff()))
+
+				// Break out of the main loop if the context is canceled since that means
+				// we're shutting down. Continue on the main loop until the subscription channel
+				// is closed.
+				if err == nil || ctx.Err() == context.Canceled {
+					continue loop
 				}
-			}
-			w.logger.V(1).Info("sending intake stream", "eventType", event.Type, "numObjects", len(event.Objs))
-			err := w.stream.Send(&intakev1.DeltaRequest{
-				Deltas: []*intakev1.Delta{
-					{
-						Op:      eventTypeToOp(event.Type),
-						Objects: event.Objs,
-					},
-				},
-			})
-			if err != nil {
-				code := status.Code(err)
-				for _, c := range retryableCodes {
-					if code == c {
-						w.logger.Error(err, "failed to send to intake stream, reseting stream...")
-						// TODO: This is going to drop events on stream failure. We want to add
-						// back the event to the queue so that it can be retried when the stream
-						// is re-established.
-						w.stream = nil
-						continue loop
-					}
-				}
-				_, err = w.stream.CloseAndRecv()
-				w.logger.Error(err, "failed to send to intake stream")
-				return err
 			}
 		}
+
+		w.logger.V(1).Info("sending intake stream", "eventType", event.Type, "numObjects", len(event.Objs))
+		err := w.stream.Send(&intakev1.DeltaRequest{
+			Deltas: []*intakev1.Delta{
+				{
+					Op:      eventTypeToOp(event.Type),
+					Objects: event.Objs,
+				},
+			},
+		})
+		if err != nil {
+			// TODO: This is going to drop events on stream failure. We want to add
+			// back the event to the queue so that it can be retried when the stream
+			// is re-established.
+			if err != io.EOF {
+				w.logger.Error(err, "unexpected error sending to intake stream")
+			}
+			_, err = w.stream.CloseAndRecv()
+			if err != nil {
+				w.logger.Error(err, "failed to send to intake stream")
+			}
+			w.stream = nil
+		}
 	}
+
 	w.logger.Info("shutting down intake worker")
-	// Shutdown
 	if w.stream != nil {
 		if _, err := w.stream.CloseAndRecv(); err != nil {
 			return fmt.Errorf("failed to close intake stream: %w", err)

@@ -132,6 +132,10 @@ func main() {
 		setupLog.Error(err, "unable to create resource inventory")
 		os.Exit(1)
 	}
+	if err := mgr.Add(rsrcStore); err != nil {
+		setupLog.Error(err, "unable to register resource inventory")
+		os.Exit(1)
+	}
 
 	intakeConn, err := grpc.NewClient(intakeAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),

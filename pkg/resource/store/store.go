@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"reflect"
@@ -612,6 +613,14 @@ func (s *store) Close() error {
 	err := s.store.Close()
 	s.closed = true
 	return err
+}
+
+// Start implements the controller-runtime.Manager Runnable interface.
+// It blocks until ctx is done, at which point it will close the store in order
+// to clean up subscriptions.
+func (s *store) Start(ctx context.Context) error {
+	<-ctx.Done()
+	return s.Close()
 }
 
 func (s *store) startEventRouter() {
