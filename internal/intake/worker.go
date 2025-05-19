@@ -111,9 +111,10 @@ loop:
 				},
 			})
 			if err != nil {
-				for _, code := range retryableCodes {
-					if status.Code(err) == code {
-						w.logger.Error(err, "failed to send intake stream, reseting stream...", "code", code)
+				code := status.Code(err)
+				for _, c := range retryableCodes {
+					if code == c {
+						w.logger.Error(err, "failed to send to intake stream, reseting stream...")
 						// TODO: This is going to drop events on stream failure. We want to add
 						// back the event to the queue so that it can be retried when the stream
 						// is re-established.
@@ -121,7 +122,9 @@ loop:
 						continue loop
 					}
 				}
-				return fmt.Errorf("failed to send intake stream: %w", err)
+				_, err = w.stream.CloseAndRecv()
+				w.logger.Error(err, "failed to send to intake stream")
+				return err
 			}
 		}
 	}
