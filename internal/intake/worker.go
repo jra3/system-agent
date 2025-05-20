@@ -80,10 +80,14 @@ loop:
 					return true, nil
 				}, backoff.WithBackOff(backoff.NewExponentialBackOff()))
 
+				if err == nil {
+					break
+				}
+
 				// Break out of the main loop if the context is canceled since that means
 				// we're shutting down. Continue on the main loop until the subscription channel
 				// is closed.
-				if err == nil || ctx.Err() == context.Canceled {
+				if ctx.Err() == context.Canceled {
 					continue loop
 				}
 			}
