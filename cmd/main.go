@@ -4,10 +4,12 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"time"
 
 	"github.com/go-logr/logr"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -139,6 +141,9 @@ func main() {
 
 	intakeConn, err := grpc.NewClient(intakeAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time: 5 * time.Minute,
+		}),
 	)
 	if err != nil {
 		setupLog.Error(err, "unable to connect to cloud inventory service")
