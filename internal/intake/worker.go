@@ -80,9 +80,7 @@ func NewWorker(store resource.Store, opts ...WorkerOpts) (*worker, error) {
 	return w, nil
 }
 
-func (w *worker) Start(_ context.Context) error {
-	ctx, cancel := context.WithCancel(context.Background())
-
+func (w *worker) Start(ctx context.Context) error {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -99,7 +97,6 @@ func (w *worker) Start(_ context.Context) error {
 
 	w.logger.Info("shutting down intake worker")
 	w.queue.ShutDownWithDrain()
-	cancel()
 	wg.Wait()
 	return nil
 }
