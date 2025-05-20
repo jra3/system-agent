@@ -83,21 +83,25 @@ func (i *indexer) Update(ctx context.Context, obj object) error {
 		return fmt.Errorf("failed to update resource to inventory: %w", err)
 	}
 
+	relsToAdd := make([]*resourcev1.Relationship, 0)
 	for _, rel := range rels {
 		pred, err := anypb.UnmarshalNew(rel.Predicate, proto.UnmarshalOptions{})
 		if err != nil {
 			return fmt.Errorf("failed to unmarshal predicate: %w", err)
 		}
-		rels, err := i.store.GetRelationships(rel.GetSubject(), rel.GetObject(), pred)
+		_, err = i.store.GetRelationships(rel.GetSubject(), rel.GetObject(), pred)
 		if err != nil {
-			err = fmt.Errorf("failed to find existing relationships: %w", err)
-			return errors.NewRetryable(err.Error())
-		}
-		if len(rels) == 0 {
-			if err := i.store.AddRelationships(rel); err != nil {
-				err = fmt.Errorf("failed to add relationship: %w", err)
+			if !errors.Is(err, resource.ErrRelationshipsNotFound) {
+				err = fmt.Errorf("failed to find existing relationships: %w", err)
 				return errors.NewRetryable(err.Error())
 			}
+			relsToAdd = append(relsToAdd, rel)
+		}
+	}
+	if len(relsToAdd) > 0 {
+		if err := i.store.AddRelationships(relsToAdd...); err != nil {
+			err = fmt.Errorf("failed to add relationship: %w", err)
+			return errors.NewRetryable(err.Error())
 		}
 	}
 	return nil
