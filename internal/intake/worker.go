@@ -2,26 +2,45 @@ package intake
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cenkalti/backoff/v5"
 	"k8s.io/client-go/util/workqueue"
 
 	"github.com/antimetal/agent/pkg/resource"
+	resourcev1 "github.com/antimetal/apis/gengo/resource/v1"
 	intakev1 "github.com/antimetal/apis/gengo/service/resource/v1"
 	"github.com/go-logr/logr"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 const (
-	workerName      = "intake-worker"
-	headerAuthorize = "authorization"
+	workerName        = "intake-worker"
+	headerAuthorize   = "authorization"
+	defaultDeltaTTL   = 30 * time.Minute
+	heartbeatInterval = 1 * time.Minute
 )
+
+var deltaVersion string
+
+func init() {
+	b := make([]byte, 4)
+	_, err := rand.Read(b)
+	if err != nil {
+		// This should never happen because rand.Read should never return an error
+		panic(fmt.Sprintf("failed to generate random delta version: %v", err))
+	}
+	deltaVersion = hex.EncodeToString(b)
+}
 
 type worker struct {
 	apiKey string
@@ -82,13 +101,24 @@ func NewWorker(store resource.Store, opts ...WorkerOpts) (*worker, error) {
 
 func (w *worker) Start(ctx context.Context) error {
 	var wg sync.WaitGroup
-	wg.Add(1)
 	go func() {
+		wg.Add(1)
 		defer wg.Done()
 		w.streamer(ctx)
 	}()
 
+	go func() {
+		wg.Add(1)
+		defer wg.Done()
+		w.heartbeatWorker(ctx)
+	}()
+
 	for event := range w.store.Subscribe(nil) {
+		for _, obj := range event.Objs {
+			obj.Ttl = durationpb.New(defaultDeltaTTL)
+			obj.DeltaVersion = deltaVersion
+		}
+
 		w.queue.AddRateLimited(&intakev1.Delta{
 			Op:      eventTypeToOp(event.Type),
 			Objects: event.Objs,
@@ -113,6 +143,28 @@ func (w *worker) streamer(ctx context.Context) {
 			return
 		default:
 			w.sendDelta(ctx)
+		}
+	}
+}
+
+func (w *worker) heartbeatWorker(ctx context.Context) {
+	ticker := time.NewTicker(heartbeatInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			w.queue.AddRateLimited(&intakev1.Delta{
+				Op: intakev1.DeltaOperation_DELTA_OPERATION_HEARTBEAT,
+				Objects: []*resourcev1.Object{
+					{
+						DeltaVersion: deltaVersion,
+						Ttl:          durationpb.New(defaultDeltaTTL),
+					},
+				},
+			})
 		}
 	}
 }
@@ -150,7 +202,7 @@ func (w *worker) sendDelta(ctx context.Context) {
 		}
 	}
 
-	w.logger.V(1).Info("sending delta", "op", delta.Op, "numObjects", len(delta.Objects))
+	w.logger.V(1).Info("sending delta", "op", delta.Op, "numObjects", len(delta.Objects), "version", deltaVersion)
 	err := w.stream.Send(&intakev1.DeltaRequest{Deltas: []*intakev1.Delta{delta}})
 	if err != nil {
 		_, err = w.stream.CloseAndRecv()
