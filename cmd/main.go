@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 
@@ -32,6 +33,7 @@ var (
 	// CLI Options
 	intakeAddr           string
 	intakeAPIKey         string
+	intakeInsecure       bool
 	metricsAddr          string
 	enableLeaderElection bool
 	probeAddr            string
@@ -50,6 +52,9 @@ func init() {
 		"The address of the cloud inventory intake service")
 	flag.StringVar(&intakeAPIKey, "intake-api-key", "",
 		"The API key to use upload resources",
+	)
+	flag.BoolVar(&intakeInsecure, "intake-insecure", false,
+		"Use insecure connection to the intake service",
 	)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080",
 		"The address the metric endpoint binds to. Set this to '0' to disable the metrics server")
@@ -139,8 +144,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	var creds credentials.TransportCredentials
+	if intakeInsecure {
+		creds = insecure.NewCredentials()
+	} else {
+		creds = credentials.NewTLS(&tls.Config{})
+	}
 	intakeConn, err := grpc.NewClient(intakeAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(creds),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time: 5 * time.Minute,
 		}),
