@@ -67,18 +67,6 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: status.podIP
-        - name: HOST_MOUNT_PREFIX
-          value: "/host"
-        - name: HOST_PROC
-          value: "/host/proc"
-        - name: HOST_SYS
-          value: "/host/sys"
-        - name: HOST_DEV
-          value: "/host/dev"
-        - name: HOST_VAR
-          value: "/host/var"
-        - name: HOST_RUN
-          value: "/host/run"
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -103,40 +91,6 @@ spec:
           requests:
             cpu: 100m
             memory: 512Mi
-        volumeMounts:
-        - name: host-proc
-          mountPath: /host/proc
-          readOnly: true
-        - name: host-sys
-          mountPath: /host/sys
-          readOnly: true
-        - name: host-dev
-          mountPath: /host/dev
-          readOnly: true
-        - name: host-var
-          mountPath: host/var
-          readOnly: true
-        - name: host-run
-          mountPath: /host/run
-          readOnly: true
-      hostNetwork: true
-      dnsPolicy: ClusterFirstWithHostNet
       serviceAccountName: agent
       terminationGracePeriodSeconds: 10
       automountServiceAccountToken: true
-      volumes:
-      - name: host-proc
-        hostPath:
-          path: /proc
-      - name: host-sys
-        hostPath:
-          path: /sys
-      - name: host-dev
-        hostPath:
-          path: /dev
-      - name: host-var
-        hostPath:
-          path: /var
-      - name: host-run
-        hostPath:
-          path: /run
