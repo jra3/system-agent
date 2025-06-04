@@ -3,11 +3,15 @@ kind: Kustomization
 
 namespace: antimetal-system
 
-namePrefix: antimetal-
-
 resources:
   - ../rbac
   - ../agent
 
 patches:
   - path: agent_auth_proxy_patch.yaml
+
+labels:
+- includeSelectors: true
+  pairs:
+    app.kubernetes.io/instance: antimetal
+    app.kubernetes.io/managed-by: kustomize

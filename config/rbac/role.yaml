@@ -2,7 +2,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: agent-role
+  name: antimetal-agent-role
 rules:
 - apiGroups:
   - ""

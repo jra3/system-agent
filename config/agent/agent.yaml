@@ -3,43 +3,31 @@ kind: Namespace
 metadata:
   labels:
     control-plane: antimetal
-    app.kubernetes.io/name: namespace
-    app.kubernetes.io/instance: system
-    app.kubernetes.io/component: agent
-    app.kubernetes.io/created-by: antimetal
+    app.kubernetes.io/name: antimetal-system
+    app.kubernetes.io/component: namespace
     app.kubernetes.io/part-of: antimetal
-    app.kubernetes.io/managed-by: kustomize
-  name: system
+  name: antimetal-system
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: agent
-  namespace: system
   labels:
     control-plane: antimetal
-    app.kubernetes.io/name: agent
-    app.kubernetes.io/instance: system
+    app.kubernetes.io/name: antimetal-agent
     app.kubernetes.io/component: agent
-    app.kubernetes.io/created-by: antimetal
     app.kubernetes.io/part-of: antimetal
-    app.kubernetes.io/managed-by: kustomize
 spec:
   selector:
     matchLabels:
       control-plane: antimetal
   template:
     metadata:
-      annotations:
-        kubectl.kubernetes.io/default-container: agent
       labels:
         control-plane: antimetal
         app.kubernetes.io/name: agent
-        app.kubernetes.io/instance: system
         app.kubernetes.io/component: agent
-        app.kubernetes.io/created-by: antimetal
         app.kubernetes.io/part-of: antimetal
-        app.kubernetes.io/managed-by: kustomize
     spec:
       # TODO(user): Uncomment the following code to configure the nodeAffinity expression
       # according to the platforms which are supported by your solution.

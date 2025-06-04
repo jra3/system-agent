@@ -12,3 +12,9 @@ resources:
 - auth_proxy_role_binding.yaml
 - auth_proxy_client_clusterrole.yaml
 - kubelet_role_binding.yaml
+
+labels:
+  - includeSelectors: true
+    pairs:
+      app.kubererntes.io/component: rbac
+      app.kubernetes.io/part-of: antimetal
