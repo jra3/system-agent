@@ -58,6 +58,7 @@ spec:
         args:
         - --leader-elect
         image: agent
+        ports: []
         env:
         - name: KUBERNETES_NODE_IP
           valueFrom:

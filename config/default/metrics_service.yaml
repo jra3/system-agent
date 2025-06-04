@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    control-plane: antimetal
+    app.kubernetes.io/name: metrics-service
+    app.kubernetes.io/component: metrics
+    app.kubernetes.io/part-of: antimetal
+  name: metrics-service
+spec:
+  ports:
+  - name: https
+    port: 8443
+    protocol: TCP
+    targetPort: metrics
+  selector:
+    control-plane: antimetal

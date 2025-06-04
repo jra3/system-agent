@@ -18,6 +18,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	"github.com/antimetal/agent/internal/intake"
@@ -33,11 +34,14 @@ var (
 	// CLI Options
 	intakeAddr           string
 	intakeAPIKey         string
-	intakeInsecure       bool
+	intakeSecure         bool
 	metricsAddr          string
+	metricsSecure        bool
+	metricsCertDir       string
+	metricsCertName      string
+	metricsKeyName       string
 	enableLeaderElection bool
 	probeAddr            string
-	secureMetrics        bool
 	enableHTTP2          bool
 	enableK8sController  bool
 	kubernetesProvider   string
@@ -48,23 +52,32 @@ var (
 )
 
 func init() {
-	flag.StringVar(&intakeAddr, "intake-address", "localhost:50051",
+	flag.StringVar(&intakeAddr, "intake-address", "intake.antimetal.com:443",
 		"The address of the cloud inventory intake service")
 	flag.StringVar(&intakeAPIKey, "intake-api-key", "",
 		"The API key to use upload resources",
 	)
-	flag.BoolVar(&intakeInsecure, "intake-insecure", false,
-		"Use insecure connection to the intake service",
+	flag.BoolVar(&intakeSecure, "intake-secure", true,
+		"Use secure connection to the Antimetal intake service",
 	)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080",
 		"The address the metric endpoint binds to. Set this to '0' to disable the metrics server")
+	flag.BoolVar(&metricsSecure, "metrics-secure", false,
+		"If set the metrics endpoint is served securely")
+	flag.StringVar(&metricsCertDir, "metrics-cert-dir", "",
+		"The directory where the metrics server TLS certificates are stored.",
+	)
+	flag.StringVar(&metricsCertName, "metrics-cert-name", "",
+		"The name of the TLS certificate file for the metrics server.",
+	)
+	flag.StringVar(&metricsKeyName, "metrics-key-name", "",
+		"The name of the TLS key file for the metrics server.",
+	)
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081",
 		"The address the probe endpoint binds to. Set this to '0' to disable the metrics server")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", true,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
-	flag.BoolVar(&secureMetrics, "metrics-secure", false,
-		"If set the metrics endpoint is served securely")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.BoolVar(&enableK8sController, "enable-kubernetes-controller", true,
@@ -106,13 +119,25 @@ func main() {
 		tlsOpts = append(tlsOpts, disableHTTP2)
 	}
 
+	metricsServerOpts := metricsserver.Options{
+		BindAddress:   metricsAddr,
+		SecureServing: metricsSecure,
+		TLSOpts:       tlsOpts,
+	}
+	if metricsSecure {
+		metricsServerOpts.FilterProvider = filters.WithAuthenticationAndAuthorization
+
+		// NOTE: If CertDir, CertName, and KeyName are empty, controller-runtime will
+		// automatically generate self-signed certificates for the metrics server. While convenient for
+		// development and testing, this setup is not recommended for production.
+		metricsServerOpts.CertDir = metricsCertDir
+		metricsServerOpts.CertName = metricsCertName
+		metricsServerOpts.KeyName = metricsKeyName
+	}
+
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme: scheme.Get(),
-		Metrics: metricsserver.Options{
-			BindAddress:   metricsAddr,
-			SecureServing: secureMetrics,
-			TLSOpts:       tlsOpts,
-		},
+		Scheme:                 scheme.Get(),
+		Metrics:                metricsServerOpts,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "4927b366.antimetal.com",
@@ -145,10 +170,10 @@ func main() {
 	}
 
 	var creds credentials.TransportCredentials
-	if intakeInsecure {
-		creds = insecure.NewCredentials()
-	} else {
+	if intakeSecure {
 		creds = credentials.NewTLS(&tls.Config{})
+	} else {
+		creds = insecure.NewCredentials()
 	}
 	intakeConn, err := grpc.NewClient(intakeAddr,
 		grpc.WithTransportCredentials(creds),
