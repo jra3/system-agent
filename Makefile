@@ -6,7 +6,7 @@ ROOT = $(shell git rev-parse --show-toplevel)
 GO_TOOLCHAIN ?= $(shell grep -oE "^toolchain go[[:digit:]]*\.[[:digit:]]*\.+[[:digit:]]*" go.mod | cut -d ' ' -f2)
 
 # Image URL to use all building/pushing image targets
-IMG ?= amagent:dev
+IMG ?= antimetal/agent:dev
 # Make builds and deploying on local KIND clusters compatible for M1 Macs
 ifeq ($(shell uname -m),arm64)
 BUILD_PLATFORMS ?= linux/arm64
@@ -49,7 +49,7 @@ help: ## Display this help.
 
 .PHONY: manifests
 manifests: controller-gen ## Generate K8s objects in config/ directory.
-	$(CONTROLLER_GEN) rbac:roleName=agent-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+	$(CONTROLLER_GEN) rbac:roleName=antimetal-agent-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
 
 .PHONY: fmt
 fmt: ## Run go fmt against code.
@@ -111,7 +111,7 @@ endif
 deploy: manifests kustomize ## Deploy agent to the K8s cluster specified in the current context in ~/.kube/config.
 	@mkdir -p $(ROOT)/tmp && cp -r $(ROOT)/config/ $(ROOT)/tmp
 	@cd $(ROOT)/tmp/config/default && \
-		$(KUSTOMIZE) edit set image amagent=$(IMG) && \
+		$(KUSTOMIZE) edit set image agent=$(IMG) && \
 		kubectl apply -k .
 	@rm -r $(ROOT)/tmp
 
@@ -126,7 +126,7 @@ undeploy: kustomize ## Undeploy controller from the K8s cluster specified in the
 .PHONY: preview-deploy
 preview-deploy: manifests kustomize ## Generate a consolidated YAML for deployment.
 	@mkdir -p $(ROOT)/tmp && cp -r $(ROOT)/config/ $(ROOT)/tmp
-	@cd $(ROOT)/tmp/config/default && $(KUSTOMIZE) edit set image amagent=$(IMG)
+	@cd $(ROOT)/tmp/config/default && $(KUSTOMIZE) edit set image agent=$(IMG)
 	$(KUSTOMIZE) build $(ROOT)/tmp/config/default
 	@rm -r $(ROOT)/tmp
 

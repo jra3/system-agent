@@ -69,7 +69,7 @@ spec:
         - /agent
         args:
         - --leader-elect
-        image: amagent
+        image: agent
         env:
         - name: KUBERNETES_NODE_IP
           valueFrom:
