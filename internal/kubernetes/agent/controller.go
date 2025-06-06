@@ -222,7 +222,7 @@ func (c *controller) indexObjects(ctx context.Context) {
 			errLog += "; will retry"
 			c.queue.AddRateLimited(ev)
 		}
-		c.logger.Error(err, errLog, "event", eventStr(ev.typ), "object", ev.obj)
+		c.logger.V(1).Info(errLog, "error", err, "event", eventStr(ev.typ), "object", ev.obj)
 		return
 	}
 

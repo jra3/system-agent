@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -208,7 +207,7 @@ func (w *worker) sendDelta(ctx context.Context) {
 		_, err = w.stream.CloseAndRecv()
 		if err != nil {
 			code := status.Code(err)
-			if code == codes.Unavailable && strings.Contains(code.String(), "max_age") {
+			if code == codes.Unavailable || code == codes.Canceled {
 				// Resetting stream due server max connection age
 				w.logger.V(1).Info("resetting intake stream")
 			} else {
