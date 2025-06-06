@@ -25,7 +25,7 @@ import (
 const (
 	workerName        = "intake-worker"
 	headerAuthorize   = "authorization"
-	defaultDeltaTTL   = 30 * time.Minute
+	defaultDeltaTTL   = 5 * time.Minute
 	heartbeatInterval = 1 * time.Minute
 )
 
