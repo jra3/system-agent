@@ -64,6 +64,14 @@ gen-check: generate ## Check if generated files are up to date.
 	@trap "echo 'ERROR: Some files need to be updated, please run make generate and commit any changed files'" ERR && \
 		git diff --exit-code > /dev/null
 
+.PHONY: license-check
+license-check: ## Check that source code files have the correct license header.
+	@$(LICENSE_CHECK)
+
+.PHONY: gen-license-headers
+gen-license-headers: ## Generate license headers for source code files.
+	@$(LICENSE_CHECK) --write
+
 .PHONY: manifests
 manifests: controller-gen ## Generate K8s objects in config/ directory.
 	$(CONTROLLER_GEN) rbac:roleName=antimetal-agent-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
@@ -196,6 +204,7 @@ KTF ?= $(LOCALBIN)/ktf
 KUBECTL ?= kubectl
 KUSTOMIZE ?= $(LOCALBIN)/kustomize
 GORELEASER ?= $(LOCALBIN)/goreleaser
+LICENSE_CHECK ?= tools/license_check/license_check.py
 
 ## Tool Versions
 CONTROLLER_TOOLS_VERSION ?= v0.17.0
