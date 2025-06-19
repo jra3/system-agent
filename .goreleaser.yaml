@@ -1,0 +1,112 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/goreleaser/goreleaser/v2.10.2/www/docs/static/schema.json
+
+version: 2
+
+project_name: antimetal-agent
+
+before:
+  hooks:
+    - go mod tidy
+    - make vendor
+
+builds:
+  - id: agent
+    binary: "{{ .Os }}/{{ .Arch }}/agent"
+    no_unique_dist_dir: true
+    main: ./cmd/main.go
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -mod=vendor
+    ldflags:
+      - -X "main.Version={{ .Version }}"
+      - -X "main.Commit={{ .Commit }}"
+      - -X "main.BuildDate={{ .Date }}"
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-dev"
+
+dockers:
+  - id: agent-linux-amd64
+    image_templates:
+      - antimetal/agent:v{{ .Version }}-amd64
+    use: buildx
+    goarch: amd64
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.name={{ .ProjectName }}"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
+      - "--label=org.opencontainers.image.revision={{ .Commit }}"
+      - "--label=org.opencontainers.image.version=v{{ .Version }}"
+      - "--label=org.opencontainers.image.source={{ .GitURL }}"
+      - "--label=org.opencontainers.image.vendor=Antimetal"
+      - "--label=org.opencontainers.image.licenses=PolyForm-Shield-1.0.0"
+  - id: agent-linux-arm64
+    image_templates:
+      - antimetal/agent:v{{ .Version }}-arm64
+    use: buildx
+    goarch: arm64
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.name={{ .ProjectName }}"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
+      - "--label=org.opencontainers.image.revision={{ .Commit }}"
+      - "--label=org.opencontainers.image.version=v{{ .Version }}"
+      - "--label=org.opencontainers.image.source={{ .GitURL }}"
+      - "--label=org.opencontainers.image.vendor=Antimetal"
+      - "--label=org.opencontainers.image.licenses=PolyForm-Shield-1.0.0"
+
+docker_manifests:
+  - id: agent
+    name_template: "antimetal/agent:v{{ .Version }}"
+    image_templates:
+      - antimetal/agent:v{{ .Version }}-amd64
+      - antimetal/agent:v{{ .Version }}-arm64
+
+checksum:
+  name_template: checksums.txt
+
+archives:
+  - formats: [tar.gz]
+    # this name template makes the OS and Arch compatible with the results of `uname`.
+    name_template: >-
+      {{ .ProjectName }}-
+      {{- title .Os }}-
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+
+changelog:
+  sort: asc
+  use: github
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: "Bug fixes"
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Others
+      order: 999
+
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+
+release:
+  name_template: "v{{ .Version }}"
+  footer: |
+    **Full Changelog**: https://github.com/antimetal/system-agent/compare/{{ .PreviousTag }}...{{ .Tag }}
+
+    ## Where to go next?
+
+    * Sign up to get [access](https://antimetal.com/waitlist).

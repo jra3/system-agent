@@ -2,21 +2,24 @@ SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec
 
 ROOT = $(shell git rev-parse --show-toplevel)
+## Location to install dependencies to
+LOCALBIN ?= $(ROOT)/bin
+## Location to store build & release artifacts
+DIST ?= $(ROOT)/dist
 
+GO_OS ?= $(shell go env GOOS)
+GO_ARCH ?= $(shell go env GOARCH)
 GO_TOOLCHAIN ?= $(shell grep -oE "^toolchain go[[:digit:]]*\.[[:digit:]]*\.+[[:digit:]]*" go.mod | cut -d ' ' -f2)
 
 # Image URL to use all building/pushing image targets
 IMG ?= antimetal/agent:dev
-# Make builds and deploying on local KIND clusters compatible for M1 Macs
-ifeq ($(shell uname -m),arm64)
-BUILD_PLATFORMS ?= linux/arm64
-else
-BUILD_PLATFORMS ?= linux/amd64
-endif
 BUILD_ARGS ?= --load
 
 # KIND_CLUSTER defines the name to use when creating KIND clusters.
 KIND_CLUSTER ?= antimetal-agent-dev
+
+# Test coverage output file
+TESTCOVERAGE_OUT ?= cover.out
 
 .PHONY: all
 all: build
@@ -45,6 +48,12 @@ all: build
 help: ## Display this help.
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
+.PHONY: clean
+clean: ## Removes build artifacts.
+	rm -rf $(LOCALBIN)
+	rm -rf $(DIST)
+	rm -f $(TESTCOVERAGE_OUT)
+
 ##@ Development
 
 .PHONY: manifests
@@ -58,8 +67,6 @@ fmt: ## Run go fmt against code.
 .PHONY: vet
 vet: ## Run go vet against code.
 	go vet ./...
-
-TESTCOVERAGE_OUT ?= cover.out
 
 .PHONY: test
 test: manifests fmt vet ## Run tests.
@@ -79,27 +86,42 @@ vendor:
 
 ##@ Build
 
-.PHONY: build
-build: manifests fmt vet ## Build agent binary.
-	go build -o bin/agent cmd/main.go
+build: goreleaser manifests fmt vet ## Build agent binary for current GOOS and GOARCH.
+	$(GORELEASER) build --auto-snapshot --clean --single-target
+
+.PHONY: build-all
+build-all: goreleaser manifests fmt vet ## Build agent binary for all platforms.
+	$(GORELEASER) build --auto-snapshot --clean
+
+.PHONY: docker.builder
+docker.builder:
+	- docker buildx create --name antimetal-agent-builder 2> /dev/null || true
+	docker buildx use antimetal-agent-builder
 
 .PHONY: docker-build
-docker-build: vendor ## Build docker image.
-	- docker buildx create --name amagent-builder 2> /dev/null || true
-	docker buildx use amagent-builder
-	DOCKER_BUILDKIT=1 docker buildx build --platform ${BUILD_PLATFORMS} ${BUILD_ARGS} -t ${IMG} .
+docker-build: docker.builder build ## Build docker image for current GOOS and GOARCH.
+	DOCKER_BUILDKIT=1 docker buildx build \
+		--platform ${GO_OS}/${GO_ARCH} \
+		-t ${IMG} \
+		-f $(ROOT)/Dockerfile \
+		${BUILD_ARGS} \
+		$(DIST)
+
+.PHONY: docker-build-all
+docker-build-all: docker.builder build-all ## Build docker image for all platforms.
+	DOCKER_BUILDKIT=1 docker buildx build \
+	--platform linux/amd64,linux/arm64 \
+	-t ${IMG} \
+	-f $(ROOT)/Dockerfile \
+	${BUILD_ARGS} \
+	$(DIST)
 
 .PHONY: docker-push
 docker-push: ## Push docker image.
 	DOCKER_BUILDKIT=1 docker push ${IMG}
 
 .PHONY: docker-build-and-push
-docker-build-and-push: docker-build docker-push ## Build and push docker image.
-
-.PHONY: clean
-clean: ## Removes bin/ and dist/ directories and test coverage outputs.
-	rm -rf $(LOCALBIN)
-	rm -f $(TESTCOVERAGE_OUT)
+docker-build-and-push: docker-build-all docker-push ## Build and push docker image.
 
 ##@ Deployment
 
@@ -146,10 +168,17 @@ load-image: kind ## Loads Docker image into KIND cluster and restarts agent for 
 .PHONY: build-and-load-image
 build-and-load-image: docker-build load-image ## Builds and loads Docker image into KIND cluster.
 
-##@ Dependencies
+##@ Release
 
-## Location to install dependencies to
-LOCALBIN ?= $(ROOT)/bin
+.PHONY: preview-release
+preview-release: goreleaser lint ## Generate a release tarball.
+	$(GORELEASER) release --clean --auto-snapshot --skip publish
+
+.PHONY: release
+release: goreleaser lint ## Create a new release.
+	$(GORELEASER) release --clean --fail-fast
+
+##@ Dependencies
 
 ## Tool Binaries
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
@@ -158,6 +187,7 @@ KIND ?= $(LOCALBIN)/kind
 KTF ?= $(LOCALBIN)/ktf
 KUBECTL ?= kubectl
 KUSTOMIZE ?= $(LOCALBIN)/kustomize
+GORELEASER ?= $(LOCALBIN)/goreleaser
 
 ## Tool Versions
 CONTROLLER_TOOLS_VERSION ?= v0.17.0
@@ -165,6 +195,7 @@ GOLANGCI_LINT_VERSION ?= v1.63.4
 KIND_VERSION ?= v0.26.0
 KTF_VERSION ?= v0.47.2
 KUSTOMIZE_VERSION ?= v5.6.0
+GORELEASER_VERSION ?= v2.10.2
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of installed binary
@@ -184,7 +215,7 @@ endef
 
 .PHONY: tools
 tools: ## Download all tool dependencies if neccessary.
-tools: controller-gen envtest golangci-lint kind ktf kustomize
+tools: controller-gen envtest golangci-lint kind ktf kustomize goreleaser
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.
@@ -220,3 +251,10 @@ $(KUSTOMIZE): $(KUSTOMIZE)@$(KUSTOMIZE_VERSION) FORCE
 	@ln -sf $< $@
 $(KUSTOMIZE)@$(KUSTOMIZE_VERSION):
 	$(call go-install-tool,$(KUSTOMIZE),sigs.k8s.io/kustomize/kustomize/v5,$(KUSTOMIZE_VERSION))
+
+.PHONY: goreleaser
+goreleaser: $(GORELEASER) ## Download goreleaser locally if necessary.
+$(GORELEASER): $(GORELEASER)@$(GORELEASER_VERSION) FORCE
+	@ln -sf $< $@
+$(GORELEASER)@$(GORELEASER_VERSION):
+	$(call go-install-tool,$(GORELEASER),github.com/goreleaser/goreleaser/v2,$(GORELEASER_VERSION))
