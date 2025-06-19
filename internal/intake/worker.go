@@ -100,14 +100,14 @@ func NewWorker(store resource.Store, opts ...WorkerOpts) (*worker, error) {
 
 func (w *worker) Start(ctx context.Context) error {
 	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
-		wg.Add(1)
 		defer wg.Done()
 		w.streamer(ctx)
 	}()
 
+	wg.Add(1)
 	go func() {
-		wg.Add(1)
 		defer wg.Done()
 		w.heartbeatWorker(ctx)
 	}()
