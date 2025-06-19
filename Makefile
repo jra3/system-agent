@@ -103,11 +103,11 @@ vendor:
 ##@ Build
 
 build: goreleaser manifests fmt vet ## Build agent binary for current GOOS and GOARCH.
-	$(GORELEASER) build --auto-snapshot --clean --single-target
+	$(GORELEASER) build --snapshot --clean --single-target
 
 .PHONY: build-all
 build-all: goreleaser manifests fmt vet ## Build agent binary for all platforms.
-	$(GORELEASER) build --auto-snapshot --clean
+	$(GORELEASER) build --snapshot --clean
 
 .PHONY: docker.builder
 docker.builder:
@@ -188,7 +188,7 @@ build-and-load-image: docker-build load-image ## Builds and loads Docker image i
 
 .PHONY: preview-release
 preview-release: goreleaser lint ## Generate a release tarball.
-	$(GORELEASER) release --clean --auto-snapshot --skip publish
+	$(GORELEASER) release --clean --fail-fast --snapshot --skip publish
 
 .PHONY: release
 release: goreleaser lint ## Create a new release.
