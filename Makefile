@@ -56,6 +56,14 @@ clean: ## Removes build artifacts.
 
 ##@ Development
 
+.PHONY: generate
+generate: manifests ## Generate all artifacts
+
+.PHONY: gen-check
+gen-check: generate ## Check if generated files are up to date.
+	@trap "echo 'ERROR: Some files need to be updated, please run make generate and commit any changed files'" ERR && \
+		git diff --exit-code > /dev/null
+
 .PHONY: manifests
 manifests: controller-gen ## Generate K8s objects in config/ directory.
 	$(CONTROLLER_GEN) rbac:roleName=antimetal-agent-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
