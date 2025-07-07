@@ -147,7 +147,7 @@ endif
 
 .PHONY: deploy
 deploy: manifests kustomize ## Deploy agent to the K8s cluster specified in the current context in ~/.kube/config.
-	@mkdir -p $(ROOT)/tmp && cp -r $(ROOT)/config/ $(ROOT)/tmp
+	@mkdir -p $(ROOT)/tmp && cp -r $(ROOT)/config $(ROOT)/tmp
 	@cd $(ROOT)/tmp/config/default && \
 		$(KUSTOMIZE) edit set image agent=$(IMG) && \
 		kubectl apply -k .
