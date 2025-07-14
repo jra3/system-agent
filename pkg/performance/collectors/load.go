@@ -78,7 +78,7 @@ func (c *LoadCollector) collectLoadStats() (*performance.LoadStats, error) {
 
 	fields := strings.Fields(string(loadavgData))
 	if len(fields) < 5 {
-		return nil, fmt.Errorf("unexpected format in %s: got %d fields, expected 5 (load1 load5 load15 running/total lastpid): %q",
+		return nil, fmt.Errorf("unexpected format in %s: got %d fields, expected 5: %q",
 			c.loadavgPath, len(fields), strings.TrimSpace(string(loadavgData)))
 	}
 

@@ -69,20 +69,6 @@ func validateLoadStats(t *testing.T, stats *performance.LoadStats, expected *per
 	}
 }
 
-func collectAndValidate(t *testing.T, collector *LoadCollector, wantErr bool) *performance.LoadStats {
-	result, err := collector.Collect(context.Background())
-
-	if wantErr {
-		assert.Error(t, err)
-		return nil
-	}
-
-	require.NoError(t, err)
-	stats, ok := result.(*performance.LoadStats)
-	require.True(t, ok)
-	return stats
-}
-
 func TestLoadCollector_Constructor(t *testing.T) {
 	tests := []struct {
 		name               string
@@ -323,7 +309,7 @@ func TestLoadCollector_DataParsing(t *testing.T) {
 			expectedErr:    "invalid syntax",
 		},
 		{
-			name:           "empty loadavg file",
+			name:           "missing loadavg file",
 			loadavgContent: "",
 			uptimeContent:  validUptimeContent,
 			wantErr:        true,
