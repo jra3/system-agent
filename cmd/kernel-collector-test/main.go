@@ -145,6 +145,7 @@ func runContinuousCollection(ctx context.Context, collector *collectors.KernelCo
 		case msg := <-msgChan:
 			if msg == nil {
 				fmt.Println("Channel closed, exiting...")
+				cancel()
 				return
 			}
 
@@ -164,13 +165,13 @@ func runContinuousCollection(ctx context.Context, collector *collectors.KernelCo
 func printMessage(num int, msg *performance.KernelMessage) {
 	// Format severity as string
 	severity := getSeverityString(msg.Severity)
-	
+
 	// Format timestamp
 	timestamp := msg.Timestamp.Format("2006-01-02 15:04:05.000")
-	
+
 	// Build output
 	fmt.Printf("[%d] %s %s", num, timestamp, severity)
-	
+
 	// Add subsystem/device if available
 	if msg.Subsystem != "" {
 		fmt.Printf(" [%s", msg.Subsystem)
@@ -179,7 +180,7 @@ func printMessage(num int, msg *performance.KernelMessage) {
 		}
 		fmt.Printf("]")
 	}
-	
+
 	// Add message
 	fmt.Printf(" %s\n", msg.Message)
 }
