@@ -46,8 +46,8 @@ RUN if [ -f /usr/include/vmlinux.h ] && [ -s /usr/include/vmlinux.h ]; then \
         exit 1; \
     fi
 
-# Install Go 1.23 from official tarball
-RUN curl -sL https://go.dev/dl/go1.23.4.linux-amd64.tar.gz | \
+# Install Go 1.24.1 from official tarball
+RUN curl -sL https://go.dev/dl/go1.24.1.linux-amd64.tar.gz | \
 		tar -C /usr/local -xz
 
 # Set Go in PATH
