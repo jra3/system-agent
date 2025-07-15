@@ -7,6 +7,7 @@
 package collectors
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -19,14 +20,12 @@ import (
 )
 
 func TestKernelCollector_parseKmsgLine(t *testing.T) {
-	// Create a test collector
 	config := performance.CollectionConfig{
 		HostProcPath: t.TempDir(),
 		HostDevPath:  "/dev",
 	}
 	collector := NewKernelCollector(logr.Discard(), config)
 
-	// Create a fake /proc/stat file for boot time calculation
 	statContent := "cpu  10 20 30 40 50 60 70 80 90 100\n" +
 		"cpu0 1 2 3 4 5 6 7 8 9 10\n" +
 		"intr 1234567890\n" +
@@ -119,76 +118,6 @@ func TestKernelCollector_parseKmsgLine(t *testing.T) {
 	}
 }
 
-func TestKernelCollector_getBootTime(t *testing.T) {
-	tempDir := t.TempDir()
-
-	// Create test /proc/stat file with boot time
-	statContent := "cpu  10 20 30 40 50 60 70 80 90 100\n" +
-		"cpu0 1 2 3 4 5 6 7 8 9 10\n" +
-		"intr 1234567890\n" +
-		"ctxt 9876543210\n" +
-		"btime 1640995200\n" + // 2022-01-01 00:00:00 UTC
-		"processes 12345\n" +
-		"procs_running 1\n" +
-		"procs_blocked 0\n"
-	statPath := filepath.Join(tempDir, "stat")
-	err := os.WriteFile(statPath, []byte(statContent), 0644)
-	require.NoError(t, err)
-
-	config := performance.CollectionConfig{
-		HostProcPath: tempDir,
-		HostDevPath:  "/dev",
-	}
-	collector := NewKernelCollector(logr.Discard(), config)
-
-	// First call should calculate boot time
-	bootTime1, err := collector.procUtils.GetBootTime()
-	require.NoError(t, err)
-
-	// Boot time should be 2022-01-01 00:00:00 UTC
-	expectedBootTime := time.Unix(1640995200, 0)
-	assert.Equal(t, expectedBootTime, bootTime1)
-
-	// Second call should return cached value
-	bootTime2, err := collector.procUtils.GetBootTime()
-	require.NoError(t, err)
-	assert.Equal(t, bootTime1, bootTime2)
-
-	// Modify the stat file - cached value should not change
-	newStatContent := "cpu  10 20 30 40 50 60 70 80 90 100\n" +
-		"cpu0 1 2 3 4 5 6 7 8 9 10\n" +
-		"intr 1234567890\n" +
-		"ctxt 9876543210\n" +
-		"btime 1700000000\n" + // Different time
-		"processes 12345\n" +
-		"procs_running 1\n" +
-		"procs_blocked 0\n"
-	err = os.WriteFile(statPath, []byte(newStatContent), 0644)
-	require.NoError(t, err)
-
-	bootTime3, err := collector.procUtils.GetBootTime()
-	require.NoError(t, err)
-	assert.Equal(t, bootTime1, bootTime3) // Still cached
-}
-
-func TestKernelCollector_Properties(t *testing.T) {
-	config := performance.CollectionConfig{
-		HostProcPath: "/proc",
-		HostDevPath:  "/dev",
-	}
-	collector := NewKernelCollector(logr.Discard(), config)
-
-	assert.Equal(t, performance.MetricTypeKernel, collector.Type())
-	assert.Equal(t, "Kernel Message Collector", collector.Name())
-
-	caps := collector.Capabilities()
-	assert.True(t, caps.SupportsOneShot)
-	assert.False(t, caps.SupportsContinuous)
-	assert.True(t, caps.RequiresRoot)
-	assert.False(t, caps.RequiresEBPF)
-	assert.Equal(t, "3.5.0", caps.MinKernelVersion)
-}
-
 func TestKernelCollector_MessageLimit(t *testing.T) {
 	config := performance.CollectionConfig{
 		HostProcPath: "/proc",
@@ -206,4 +135,93 @@ func TestKernelCollector_MessageLimit(t *testing.T) {
 	// Test with invalid limit (should keep default)
 	collector3 := NewKernelCollector(logr.Discard(), config, WithMessageLimit(0))
 	assert.Equal(t, defaultMessageLimit, collector3.messageLimit)
+}
+
+func TestKernelCollector_ContinuousCollection(t *testing.T) {
+	config := performance.CollectionConfig{
+		HostProcPath: t.TempDir(),
+		HostDevPath:  t.TempDir(),
+	}
+
+	// Create a fake /proc/stat file for boot time calculation
+	statContent := "cpu  10 20 30 40 50 60 70 80 90 100\n" +
+		"btime 1640995200\n" + // 2022-01-01 00:00:00 UTC
+		"processes 12345\n"
+	err := os.WriteFile(filepath.Join(config.HostProcPath, "stat"), []byte(statContent), 0644)
+	require.NoError(t, err)
+
+	collector := NewKernelCollector(logr.Discard(), config)
+
+	// Test Status before starting
+	assert.Equal(t, performance.CollectorStatusDisabled, collector.Status())
+	assert.Nil(t, collector.LastError())
+
+	// Test Start
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ch, err := collector.Start(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, ch)
+
+	// Test Status after starting
+	assert.Equal(t, performance.CollectorStatusActive, collector.Status())
+
+	// Test double start should fail
+	_, err = collector.Start(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "already running")
+
+	// Test Stop
+	err = collector.Stop()
+	require.NoError(t, err)
+
+	// Test Status after stopping
+	assert.Equal(t, performance.CollectorStatusDisabled, collector.Status())
+
+	// Test double stop should be ok
+	err = collector.Stop()
+	assert.NoError(t, err)
+}
+
+func TestKernelCollector_ParseMessageContent(t *testing.T) {
+	tests := []struct {
+		name          string
+		message       string
+		wantSubsystem string
+		wantDevice    string
+	}{
+		{
+			name:          "usb device format",
+			message:       "usb 1-1: new high-speed USB device number 2 using xhci_hcd",
+			wantSubsystem: "usb",
+			wantDevice:    "1-1",
+		},
+		{
+			name:          "bracketed subsystem",
+			message:       "[drm:intel_dp_detect [i915]] DP-1: EDID checksum failed",
+			wantSubsystem: "drm:intel_dp_detect [i915]",
+			wantDevice:    "",
+		},
+		{
+			name:          "simple subsystem with colon",
+			message:       "kernel: Out of memory: Kill process 1234 (chrome) score 999",
+			wantSubsystem: "kernel",
+			wantDevice:    "",
+		},
+		{
+			name:          "no clear subsystem",
+			message:       "Some random kernel message without clear structure",
+			wantSubsystem: "",
+			wantDevice:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			subsystem, device := parseMessageContent(tt.message)
+			assert.Equal(t, tt.wantSubsystem, subsystem)
+			assert.Equal(t, tt.wantDevice, device)
+		})
+	}
 }

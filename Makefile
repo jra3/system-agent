@@ -139,6 +139,12 @@ docker-push: ## Push docker image.
 .PHONY: docker-build-and-push
 docker-build-and-push: docker-build-all docker-push ## Build and push docker image.
 
+.PHONY: kernel-collector-test
+kernel-collector-test: ## Build kernel collector test harness
+	go build -o $(LOCALBIN)/kernel-collector-test ./cmd/kernel-collector-test/main.go
+	@echo "Built: $(LOCALBIN)/kernel-collector-test"
+	@echo "Run with: sudo $(LOCALBIN)/kernel-collector-test"
+
 ##@ Deployment
 
 ifndef ignore-not-found
