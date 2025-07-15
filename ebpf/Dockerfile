@@ -11,28 +11,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 		libbpf-dev \
 		linux-tools-generic \
 		make \
+		git \
+		build-essential \
 		&& rm -rf /var/lib/apt/lists/*
+
+# Build bpftool from source to get latest version with Go support
+RUN git clone --depth 1 --branch v7.5.0 https://github.com/libbpf/bpftool.git /tmp/bpftool && \
+    cd /tmp/bpftool && \
+    git submodule update --init && \
+    cd src && \
+    make -j$(nproc) && \
+    make install && \
+    cd / && \
+    rm -rf /tmp/bpftool
 
 # Download pre-generated vmlinux.h from btfhub
 # This provides a vmlinux.h that works for CO-RE across many kernel versions
 RUN echo "=== Downloading pre-generated vmlinux.h ===" && \
-    # Use btfhub's vmlinux headers which are known to work well for CO-RE
-    curl -sL https://github.com/aquasecurity/btfhub-archive/raw/main/ubuntu/24.04/arm64/6.8.0-49-generic.btf.tar.xz | \
-        tar -xJ -O | \
-        bpftool btf dump file /dev/stdin format c > /usr/include/vmlinux.h 2>/dev/null || \
-    # Fallback to x86_64 if arm64 fails
-    (echo "ARM64 BTF not found, trying x86_64..." && \
-     curl -sL https://github.com/aquasecurity/btfhub-archive/raw/main/ubuntu/24.04/x86_64/6.8.0-49-generic.btf.tar.xz | \
-        tar -xJ -O | \
-        bpftool btf dump file /dev/stdin format c > /usr/include/vmlinux.h) || \
-    # Final fallback: download from libbpf-bootstrap
-    (echo "Falling back to libbpf-bootstrap vmlinux.h..." && \
-     curl -sL https://raw.githubusercontent.com/libbpf/libbpf-bootstrap/master/vmlinux/vmlinux.h > /usr/include/vmlinux.h) && \
+    curl -sL https://github.com/aquasecurity/btfhub-archive/raw/main/ubuntu/20.04/arm64/5.8.0-63-generic.btf.tar.xz -o /tmp/btf.tar.xz && \
+    tar -xJf /tmp/btf.tar.xz -C /tmp && \
+    bpftool btf dump file /tmp/5.8.0-63-generic.btf format c > /usr/include/vmlinux.h && \
+    rm -f /tmp/btf.tar.xz /tmp/5.8.0-63-generic.btf && \
     echo "Downloaded vmlinux.h with $(wc -l < /usr/include/vmlinux.h 2>/dev/null || echo 0) lines"
-
-# Make bpftool accessible (Ubuntu puts it in version-specific directory)
-RUN ln -sf /usr/lib/linux-tools/*/bpftool /usr/local/bin/bpftool || \
-		echo "Warning: bpftool symlink failed, will try at runtime"
 
 # Verify vmlinux.h was downloaded successfully
 RUN if [ -f /usr/include/vmlinux.h ] && [ -s /usr/include/vmlinux.h ]; then \

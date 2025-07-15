@@ -28,3 +28,8 @@ dist/
 # eBPF generated files
 *_bpfe*.go
 *_bpfe*.o
+*.bpf.go
+*.bpf.h
+*.bpf.o
+ebpf/build/
+internal/ebpf/*/
