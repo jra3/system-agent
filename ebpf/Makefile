@@ -28,9 +28,6 @@ else
 	CD := cd
 endif
 
-# BTF and vmlinux.h location
-VMLINUX := /usr/include/vmlinux.h
-
 # Compiler flags
 INCLUDES := -I$(LIBBPF_HEADERS) -I./include
 CFLAGS := -g -O2 -Wall -target bpf -D__TARGET_ARCH_$(ARCH)
