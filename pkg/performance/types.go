@@ -366,6 +366,10 @@ func (c *CollectionConfig) ApplyDefaults() {
 // CPUInfo represents CPU hardware configuration
 type CPUInfo struct {
 	// CPU counts
+	// PhysicalCores represents the number of physical CPU cores. If physical topology
+	// information is unavailable (e.g., in virtualized environments), this field falls
+	// back to counting logical cores instead. This behavior ensures compatibility but
+	// may not always reflect the actual physical core count.
 	PhysicalCores int32
 	LogicalCores  int32
 	// CPU identification
