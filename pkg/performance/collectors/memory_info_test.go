@@ -220,22 +220,22 @@ func TestMemoryInfoCollector_ComplexCPUList(t *testing.T) {
 	assert.Equal(t, []int32{0, 1, 2, 3, 8, 10, 11, 15}, info.NUMANodes[0].CPUs)
 }
 
+// NUMA node with empty CPU list
+//
+// NOTE: This is an extremely unusual scenario in practice. NUMA nodes typically
+// always have associated CPUs. An empty CPU list could theoretically occur in:
+// - Memory-only nodes (very rare, exotic hardware configurations)
+// - Transient states during CPU hotplug operations
+// - Hardware configuration errors or firmware bugs
+// - Corrupted sysfs state
+// This test ensures graceful handling of such edge cases rather than representing
+// common real-world scenarios.
 func TestMemoryInfoCollector_EmptyCPUList(t *testing.T) {
 	collector, tmpDir := createTestMemoryInfoCollector(t)
 
-	// Create meminfo
 	meminfoPath := filepath.Join(tmpDir, "proc", "meminfo")
 	require.NoError(t, os.WriteFile(meminfoPath, []byte(testMeminfo), 0644))
 
-	// Create NUMA node with empty CPU list
-	// NOTE: This is an extremely unusual scenario in practice. NUMA nodes typically
-	// always have associated CPUs. An empty CPU list could theoretically occur in:
-	// - Memory-only nodes (very rare, exotic hardware configurations)
-	// - Transient states during CPU hotplug operations
-	// - Hardware configuration errors or firmware bugs
-	// - Corrupted sysfs state
-	// This test ensures graceful handling of such edge cases rather than representing
-	// common real-world scenarios.
 	nodePath := filepath.Join(tmpDir, "sys", "devices", "system", "node", "node0")
 	require.NoError(t, os.MkdirAll(nodePath, 0755))
 
