@@ -214,31 +214,31 @@ func (c *CPUInfoCollector) parseCPUInfo(info *performance.CPUInfo) error {
 	// We detect meaningful physical topology by checking if we have variety in
 	// PhysicalID or CoreID values, indicating real hardware topology information
 	hasPhysicalInfo := false
-	
+
 	// Check if we have meaningful physical topology by looking for non-zero values
 	// or multiple different values, indicating real hardware topology
 	if len(info.Cores) > 0 {
 		// Look for any non-zero PhysicalID or CoreID, or multiple different values
 		seenPhysicalIDs := make(map[int32]bool)
 		seenCoreIDs := make(map[int32]bool)
-		
+
 		for _, core := range info.Cores {
 			seenPhysicalIDs[core.PhysicalID] = true
 			seenCoreIDs[core.CoreID] = true
-			
+
 			// If we see non-zero values, we have physical topology info
 			if core.PhysicalID != 0 || core.CoreID != 0 {
 				hasPhysicalInfo = true
 			}
 		}
-		
+
 		// Even if all values are 0, if we have multiple processors with different
 		// core IDs, we might have meaningful topology
 		if !hasPhysicalInfo && len(seenCoreIDs) > 1 {
 			hasPhysicalInfo = true
 		}
 	}
-	
+
 	// Build map of unique physical cores
 	for _, core := range info.Cores {
 		coreKey := fmt.Sprintf("%d:%d", core.PhysicalID, core.CoreID)

@@ -31,14 +31,14 @@ var (
 )
 
 type CollectorResult struct {
-	Name        string
-	Type        performance.MetricType
-	Success     bool
-	Error       error
-	Duration    time.Duration
-	DataSize    int
-	Data        interface{}
-	Benchmarks  []time.Duration
+	Name       string
+	Type       performance.MetricType
+	Success    bool
+	Error      error
+	Duration   time.Duration
+	DataSize   int
+	Data       interface{}
+	Benchmarks []time.Duration
 }
 
 func main() {
@@ -291,7 +291,7 @@ func runBenchmarks(collectors []performance.PointCollector, results []CollectorR
 		median := durations[len(durations)/2]
 
 		fmt.Printf("   Results:\n")
-		fmt.Printf("     Success Rate: %d/%d (%.1f%%)\n", successCount, *iterations, 
+		fmt.Printf("     Success Rate: %d/%d (%.1f%%)\n", successCount, *iterations,
 			float64(successCount)/float64(*iterations)*100)
 		fmt.Printf("     Average: %v\n", avg)
 		fmt.Printf("     Median:  %v\n", median)
