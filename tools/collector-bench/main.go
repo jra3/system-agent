@@ -210,6 +210,9 @@ func printCollectorData(data interface{}, indent string) {
 
 	case []performance.DiskInfo:
 		fmt.Printf("%sDisks: %d\n", indent, len(v))
+		if len(v) == 0 && *verbose {
+			fmt.Printf("%s  (No disks detected - check /sys/block/ for available devices)\n", indent)
+		}
 		for _, disk := range v {
 			diskType := "SSD"
 			if disk.Rotational {
