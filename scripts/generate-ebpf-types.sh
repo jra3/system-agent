@@ -40,6 +40,7 @@ if [[ -z "$HEADER_FILES" ]]; then
 fi
 
 # Generate Go types for each header file
+GENERATED_FILES=()
 for header in $HEADER_FILES; do
     basename=$(basename "$header" .h)
     collector_name="${basename%_types}"
@@ -55,11 +56,15 @@ for header in $HEADER_FILES; do
         echo -e "${RED}Failed to generate types for $header${NC}"
         exit 1
     fi
+    
+    GENERATED_FILES+=("$output_file")
 done
 
-# Run go fmt on generated files
-echo "Formatting generated files..."
-go fmt "${PROJECT_ROOT}/pkg/performance/collectors/"*_types.go
+# Run go fmt on generated files only
+if [ ${#GENERATED_FILES[@]} -gt 0 ]; then
+    echo "Formatting generated files..."
+    go fmt "${GENERATED_FILES[@]}"
+fi
 
 # Generate the gen_types.sh wrapper if it doesn't exist
 GEN_SCRIPT="${PROJECT_ROOT}/pkg/performance/collectors/gen_types.sh"

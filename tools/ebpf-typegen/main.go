@@ -18,6 +18,9 @@ import (
 	"strconv"
 	"strings"
 	"text/template"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 type Config struct {
@@ -106,6 +109,22 @@ var (
 		"int":      "int32",
 		"unsigned": "uint32",
 	}
+
+	// Known constants for array sizes
+	knownConstants = map[string]int{
+		"TASK_COMM_LEN":      16,
+		"ARGSIZE":            128,
+		"TOTAL_MAX_ARGS":     60,
+		"FULL_MAX_ARGS_ARR":  60 * 128,
+	}
+
+	titleCase = cases.Title(language.English)
+
+	// Pre-compiled regex patterns for performance
+	defineRe = regexp.MustCompile(`#define\s+([A-Z_]+)\s+(\d+)`)
+	structRe = regexp.MustCompile(`(?s)struct\s+(\w+)\s*\{([^}]+)\}`)
+	arrayRe  = regexp.MustCompile(`^(\S+)\s+(\w+)\[(\w+)\]$`)
+	fieldRe  = regexp.MustCompile(`^(\S+)\s+(\w+)$`)
 )
 
 func main() {
@@ -176,7 +195,6 @@ func parseConstants(content string) []Constant {
 	var constants []Constant
 
 	// Match #define NAME VALUE patterns where VALUE is a number
-	defineRe := regexp.MustCompile(`#define\s+([A-Z_]+)\s+(\d+)`)
 	matches := defineRe.FindAllStringSubmatch(content, -1)
 
 	for _, match := range matches {
@@ -206,7 +224,6 @@ func parseStructs(content string) []Struct {
 	var structs []Struct
 
 	// Match struct definitions - use (?s) flag to make . match newlines
-	structRe := regexp.MustCompile(`(?s)struct\s+(\w+)\s*\{([^}]+)\}`)
 	matches := structRe.FindAllStringSubmatch(content, -1)
 
 	for _, match := range matches {
@@ -255,7 +272,6 @@ func parseField(line string) *StructField {
 	line = strings.TrimSpace(line)
 
 	// Match array fields: type name[size] where size can be a number or constant
-	arrayRe := regexp.MustCompile(`^(\S+)\s+(\w+)\[(\w+)\]$`)
 	if matches := arrayRe.FindStringSubmatch(line); matches != nil {
 		cType := matches[1]
 		name := matches[2]
@@ -264,18 +280,14 @@ func parseField(line string) *StructField {
 		// Try to parse as number, otherwise look up constant
 		size, err := strconv.Atoi(sizeStr)
 		if err != nil {
-			// Map known constants
-			switch sizeStr {
-			case "TASK_COMM_LEN":
-				size = 16
-			case "ARGSIZE":
-				size = 128
-			case "TOTAL_MAX_ARGS":
-				size = 60
-			case "FULL_MAX_ARGS_ARR":
-				size = 60 * 128
-			default:
-				fmt.Fprintf(os.Stderr, "Warning: Unknown array size constant: %s\n", sizeStr)
+			// Look up known constants
+			if knownSize, ok := knownConstants[sizeStr]; ok {
+				size = knownSize
+			} else {
+				if _, err := fmt.Fprintf(os.Stderr, "Warning: Unknown array size constant: %s\n", sizeStr); err != nil {
+					// Log error but continue processing
+					log.Printf("Failed to write warning to stderr: %v", err)
+				}
 				return nil
 			}
 		}
@@ -291,7 +303,6 @@ func parseField(line string) *StructField {
 	}
 
 	// Match regular fields: type name
-	fieldRe := regexp.MustCompile(`^(\S+)\s+(\w+)$`)
 	if matches := fieldRe.FindStringSubmatch(line); matches != nil {
 		cType := matches[1]
 		name := matches[2]
@@ -305,7 +316,10 @@ func parseField(line string) *StructField {
 
 	// If we couldn't parse, log it for debugging
 	if line != "" {
-		fmt.Fprintf(os.Stderr, "Warning: Could not parse field: %q\n", line)
+		if _, err := fmt.Fprintf(os.Stderr, "Warning: Could not parse field: %q\n", line); err != nil {
+			// Log error but continue processing
+			log.Printf("Failed to write warning to stderr: %v", err)
+		}
 	}
 
 	return nil
@@ -331,7 +345,7 @@ func toCamelCase(s string) string {
 	parts := strings.Split(strings.ToLower(s), "_")
 	for i, part := range parts {
 		if part != "" {
-			parts[i] = strings.Title(part)
+			parts[i] = titleCase.String(part)
 		}
 	}
 	return strings.Join(parts, "")
@@ -371,9 +385,9 @@ func toGoStructName(s string) string {
 		if part != "" {
 			// Keep uppercase parts (like SNOOP) as-is
 			if part == strings.ToUpper(part) {
-				camel += strings.Title(strings.ToLower(part))
+				camel += titleCase.String(strings.ToLower(part))
 			} else {
-				camel += strings.Title(part)
+				camel += titleCase.String(part)
 			}
 		}
 	}
