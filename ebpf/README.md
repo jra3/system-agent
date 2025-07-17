@@ -99,3 +99,45 @@ pkg/performance/collectors/
 ## Testing
 
 eBPF programs should be tested through their Go userspace counterparts. The generated bindings provide the interface for loading and interacting with eBPF programs from Go code.
+
+## Security and Checksum Management
+
+The `Dockerfile.builder` includes integrity verification for all external downloads to prevent supply chain attacks.
+
+### Updating Asset Checksums
+
+When updating to new versions of Go or BTF archives, you need to update the expected checksums:
+
+#### For Go Updates:
+1. Update the `GO_VERSION` variable in `Dockerfile.builder`
+2. Temporarily comment out the checksum verification lines (lines with `if [ "$ACTUAL_SHA256" != "$EXPECTED_GO_SHA256" ]`)
+3. Run `make build-ebpf-builder` to get the new checksums
+4. Copy the displayed SHA256 checksums from the build output
+5. Update the `EXPECTED_GO_SHA256` values in the `case "$GO_ARCH"` section
+6. Uncomment the verification section
+7. Test with `make build-ebpf-builder`
+
+#### For BTF Updates:
+1. Update the `BTF_URL` variable in `Dockerfile.builder`
+2. Temporarily comment out the checksum verification lines (lines with `if [ "$ACTUAL_SHA256" != "$EXPECTED_BTF_SHA256" ]`)
+3. Run `make build-ebpf-builder` to get the new checksum
+4. Copy the displayed SHA256 checksum from the build output
+5. Update the `EXPECTED_BTF_SHA256` variable
+6. Uncomment the verification section
+7. Test with `make build-ebpf-builder`
+
+#### Quick Checksum Generation Commands:
+```bash
+# Get Go checksums for both architectures
+curl -sL https://go.dev/dl/go1.24.1.linux-amd64.tar.gz | sha256sum
+curl -sL https://go.dev/dl/go1.24.1.linux-arm64.tar.gz | sha256sum
+
+# Get BTF checksum
+curl -sL https://github.com/aquasecurity/btfhub-archive/raw/main/ubuntu/20.04/arm64/5.8.0-63-generic.btf.tar.xz | sha256sum
+```
+
+### Security Features
+- **Checksum verification** for all external downloads
+- **Git tag verification** for source builds (when possible)
+- **Explicit failure** when checksums don't match
+- **Audit trail** of all downloaded checksums in build logs
