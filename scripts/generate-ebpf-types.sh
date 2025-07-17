@@ -26,7 +26,7 @@ echo -e "${GREEN}Generating eBPF type definitions...${NC}"
 
 # Build the generator tool
 echo "Building ebpf-typegen..."
-if ! go build -o "${PROJECT_ROOT}/bin/ebpf-typegen" "${PROJECT_ROOT}/cmd/ebpf-typegen/main.go"; then
+if ! go build -o "${PROJECT_ROOT}/bin/ebpf-typegen" "${PROJECT_ROOT}/tools/ebpf-typegen/main.go"; then
     echo -e "${RED}Failed to build ebpf-typegen${NC}"
     exit 1
 fi
