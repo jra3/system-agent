@@ -46,9 +46,15 @@ RUN if [ -f /usr/include/vmlinux.h ] && [ -s /usr/include/vmlinux.h ]; then \
         exit 1; \
     fi
 
-# Install Go 1.24.1 from official tarball
-RUN curl -sL https://go.dev/dl/go1.24.1.linux-amd64.tar.gz | \
-		tar -C /usr/local -xz
+# Install Go 1.24.1 from official tarball based on architecture
+RUN ARCH=$(uname -m) && \
+    case "$ARCH" in \
+        x86_64) GO_ARCH="amd64" ;; \
+        aarch64) GO_ARCH="arm64" ;; \
+        *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+    esac && \
+    curl -sL https://go.dev/dl/go1.24.1.linux-${GO_ARCH}.tar.gz | \
+    tar -C /usr/local -xz
 
 # Set Go in PATH
 ENV PATH="/usr/local/go/bin:${PATH}"
