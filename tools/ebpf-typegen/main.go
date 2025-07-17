@@ -8,6 +8,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"go/format"
@@ -27,7 +28,67 @@ type Config struct {
 	InputFile  string
 	OutputFile string
 	Package    string
+	Verbose    bool
 }
+
+// ErrorType represents different categories of errors
+type ErrorType string
+
+const (
+	ErrTypeConfig    ErrorType = "configuration"
+	ErrTypeIO        ErrorType = "io"
+	ErrTypeParsing   ErrorType = "parsing"
+	ErrTypeGeneration ErrorType = "generation"
+	ErrTypeValidation ErrorType = "validation"
+)
+
+// TypegenError represents a categorized error with context
+type TypegenError struct {
+	Type    ErrorType
+	Message string
+	File    string
+	Line    int
+	Cause   error
+}
+
+func (e *TypegenError) Error() string {
+	if e.File != "" {
+		if e.Line > 0 {
+			return fmt.Sprintf("%s error in %s:%d: %s", e.Type, e.File, e.Line, e.Message)
+		}
+		return fmt.Sprintf("%s error in %s: %s", e.Type, e.File, e.Message)
+	}
+	return fmt.Sprintf("%s error: %s", e.Type, e.Message)
+}
+
+func (e *TypegenError) Unwrap() error {
+	return e.Cause
+}
+
+// Logger provides structured logging with levels
+type Logger struct {
+	verbose bool
+}
+
+func (l *Logger) Info(msg string, args ...interface{}) {
+	log.Printf("INFO: "+msg, args...)
+}
+
+func (l *Logger) Warn(msg string, args ...interface{}) {
+	log.Printf("WARN: "+msg, args...)
+}
+
+func (l *Logger) Error(msg string, args ...interface{}) {
+	log.Printf("ERROR: "+msg, args...)
+}
+
+func (l *Logger) Debug(msg string, args ...interface{}) {
+	if l.verbose {
+		log.Printf("DEBUG: "+msg, args...)
+	}
+}
+
+var logger *Logger
 
 type StructField struct {
 	Name     string
@@ -132,22 +193,140 @@ func main() {
 	flag.StringVar(&cfg.InputFile, "input", "", "Input C header file")
 	flag.StringVar(&cfg.OutputFile, "output", "", "Output Go file")
 	flag.StringVar(&cfg.Package, "package", "collectors", "Go package name")
+	flag.BoolVar(&cfg.Verbose, "verbose", false, "Enable verbose logging")
 	flag.Parse()
 
-	if cfg.InputFile == "" || cfg.OutputFile == "" {
-		flag.Usage()
-		log.Fatal("Both -input and -output flags are required")
+	logger = &Logger{verbose: cfg.Verbose}
+
+	if err := validateConfig(cfg); err != nil {
+		logger.Error("Configuration validation failed: %v", err)
+		os.Exit(1)
 	}
 
 	if err := generate(cfg); err != nil {
-		log.Fatal(err)
+		var typgenErr *TypegenError
+		if errors.As(err, &typgenErr) {
+			logger.Error("%s", typgenErr.Error())
+			if typgenErr.Cause != nil {
+				logger.Debug("Underlying error: %v", typgenErr.Cause)
+			}
+		} else {
+			logger.Error("Generation failed: %v", err)
+		}
+		os.Exit(1)
 	}
+
+	logger.Info("Generated %s from %s", cfg.OutputFile, cfg.InputFile)
+}
+
+func validateConfig(cfg Config) error {
+	if cfg.InputFile == "" || cfg.OutputFile == "" {
+		return &TypegenError{
+			Type:    ErrTypeConfig,
+			Message: "Both -input and -output flags are required",
+		}
+	}
+
+	// Validate input file exists and has correct extension
+	if _, err := os.Stat(cfg.InputFile); err != nil {
+		return &TypegenError{
+			Type:    ErrTypeConfig,
+			Message: fmt.Sprintf("Input file does not exist: %s", cfg.InputFile),
+			File:    cfg.InputFile,
+			Cause:   err,
+		}
+	}
+
+	if !strings.HasSuffix(cfg.InputFile, ".h") {
+		return &TypegenError{
+			Type:    ErrTypeConfig,
+			Message: fmt.Sprintf("Input file must have .h extension: %s", cfg.InputFile),
+			File:    cfg.InputFile,
+		}
+	}
+
+	// Validate output directory exists and is writable
+	outputDir := filepath.Dir(cfg.OutputFile)
+	if outputDir != "." {
+		if _, err := os.Stat(outputDir); err != nil {
+			return &TypegenError{
+				Type:    ErrTypeConfig,
+				Message: fmt.Sprintf("Output directory does not exist: %s", outputDir),
+				File:    cfg.OutputFile,
+				Cause:   err,
+			}
+		}
+	}
+
+	// Validate Go package name format
+	if !isValidGoPackageName(cfg.Package) {
+		return &TypegenError{
+			Type:    ErrTypeConfig,
+			Message: fmt.Sprintf("Invalid Go package name: %s", cfg.Package),
+		}
+	}
+
+	return nil
+}
+
+func isValidGoPackageName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		if i == 0 {
+			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '_') {
+				return false
+			}
+		} else {
+			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func validateParsedData(data FileData) error {
+	if len(data.Structs) == 0 && len(data.Constants) == 0 {
+		return &TypegenError{
+			Type:    ErrTypeValidation,
+			Message: "No structs or constants found in input file",
+		}
+	}
+
+	// Check for empty structs
+	for _, s := range data.Structs {
+		if len(s.Fields) == 0 {
+			logger.Warn("Struct %s has no fields", s.Name)
+		}
+	}
+
+	// Validate field types
+	for _, s := range data.Structs {
+		for _, field := range s.Fields {
+			if field.GoType == "" {
+				return &TypegenError{
+					Type:    ErrTypeValidation,
+					Message: fmt.Sprintf("Field %s in struct %s has empty Go type", field.Name, s.Name),
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 func generate(cfg Config) error {
+	logger.Debug("Reading input file: %s", cfg.InputFile)
 	content, err := os.ReadFile(cfg.InputFile)
 	if err != nil {
-		return fmt.Errorf("reading input file: %w", err)
+		return &TypegenError{
+			Type:    ErrTypeIO,
+			Message: fmt.Sprintf("Failed to read input file: %s", cfg.InputFile),
+			File:    cfg.InputFile,
+			Cause:   err,
+		}
 	}
 
 	data := FileData{
@@ -156,38 +335,81 @@ func generate(cfg Config) error {
 	}
 
 	// Parse constants
+	logger.Debug("Parsing constants...")
 	data.Constants = parseConstants(string(content))
+	logger.Debug("Found %d constants", len(data.Constants))
 
 	// Parse structs
-	data.Structs = parseStructs(string(content))
+	logger.Debug("Parsing structs...")
+	data.Structs, err = parseStructs(string(content))
+	if err != nil {
+		return &TypegenError{
+			Type:    ErrTypeParsing,
+			Message: "Failed to parse structs",
+			File:    cfg.InputFile,
+			Cause:   err,
+		}
+	}
+	logger.Debug("Found %d structs", len(data.Structs))
+
+	// Validate parsed data
+	if err := validateParsedData(data); err != nil {
+		return err
+	}
 
 	// Generate Go code
+	logger.Debug("Generating Go code...")
 	tmpl, err := template.New("go").Parse(goTemplate)
 	if err != nil {
-		return fmt.Errorf("parsing template: %w", err)
+		return &TypegenError{
+			Type:    ErrTypeGeneration,
+			Message: "Failed to parse Go template",
+			Cause:   err,
+		}
 	}
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
-		return fmt.Errorf("executing template: %w", err)
+		return &TypegenError{
+			Type:    ErrTypeGeneration,
+			Message: "Failed to execute Go template",
+			Cause:   err,
+		}
 	}
 
 	// Format the generated code
+	logger.Debug("Formatting generated code...")
 	formatted, err := format.Source(buf.Bytes())
 	if err != nil {
 		// Write unformatted for debugging
-		if err := os.WriteFile(cfg.OutputFile, buf.Bytes(), 0644); err != nil {
-			return fmt.Errorf("writing output file: %w", err)
+		logger.Warn("Failed to format generated code, writing unformatted version for debugging")
+		if writeErr := os.WriteFile(cfg.OutputFile, buf.Bytes(), 0644); writeErr != nil {
+			return &TypegenError{
+				Type:    ErrTypeIO,
+				Message: "Failed to write unformatted output file",
+				File:    cfg.OutputFile,
+				Cause:   writeErr,
+			}
 		}
-		return fmt.Errorf("formatting generated code: %w", err)
+		return &TypegenError{
+			Type:    ErrTypeGeneration,
+			Message: "Failed to format generated Go code",
+			File:    cfg.OutputFile,
+			Cause:   err,
+		}
 	}
 
 	// Write output
+	logger.Debug("Writing output file: %s", cfg.OutputFile)
 	if err := os.WriteFile(cfg.OutputFile, formatted, 0644); err != nil {
-		return fmt.Errorf("writing output file: %w", err)
+		return &TypegenError{
+			Type:    ErrTypeIO,
+			Message: "Failed to write output file",
+			File:    cfg.OutputFile,
+			Cause:   err,
+		}
 	}
 
-	fmt.Printf("Generated %s from %s\n", cfg.OutputFile, cfg.InputFile)
 	return nil
 }
 
@@ -220,8 +442,9 @@ func parseConstants(content string) []Constant {
 	return constants
 }
 
-func parseStructs(content string) []Struct {
+func parseStructs(content string) ([]Struct, error) {
 	var structs []Struct
+	structNames := make(map[string]bool)
 
 	// Match struct definitions - use (?s) flag to make . match newlines
 	matches := structRe.FindAllStringSubmatch(content, -1)
@@ -230,32 +453,49 @@ func parseStructs(content string) []Struct {
 		structName := match[1]
 		body := match[2]
 
+		goStructName := toGoStructName(structName)
+
+		// Check for duplicate struct names
+		if structNames[goStructName] {
+			logger.Warn("Duplicate struct name found: %s", goStructName)
+			continue
+		}
+		structNames[goStructName] = true
+
 		s := Struct{
-			Name: toGoStructName(structName),
+			Name: goStructName,
 		}
 
 		// Parse fields
 		lines := strings.Split(body, "\n")
-		for _, line := range lines {
+		for lineNum, line := range lines {
 			line = strings.TrimSpace(line)
 			if line == "" || strings.HasPrefix(line, "//") || strings.HasPrefix(line, "/*") || strings.HasPrefix(line, "*") {
 				continue
 			}
 
-			if field := parseField(line); field != nil {
+			field, err := parseField(line, lineNum+1)
+			if err != nil {
+				logger.Warn("Failed to parse field in struct %s line %d: %v", structName, lineNum+1, err)
+				continue
+			}
+			if field != nil {
 				s.Fields = append(s.Fields, *field)
 			}
 		}
 
 		if len(s.Fields) > 0 {
 			structs = append(structs, s)
+			logger.Debug("Parsed struct %s with %d fields", s.Name, len(s.Fields))
+		} else {
+			logger.Warn("Struct %s has no parseable fields", structName)
 		}
 	}
 
-	return structs
+	return structs, nil
 }
 
-func parseField(line string) *StructField {
+func parseField(line string, lineNum int) (*StructField, error) {
 	// Remove comments
 	if idx := strings.Index(line, "//"); idx >= 0 {
 		line = line[:idx]
@@ -264,7 +504,7 @@ func parseField(line string) *StructField {
 
 	// Skip empty lines or lines without semicolon
 	if line == "" || !strings.HasSuffix(line, ";") {
-		return nil
+		return nil, nil
 	}
 
 	// Remove semicolon
@@ -284,11 +524,8 @@ func parseField(line string) *StructField {
 			if knownSize, ok := knownConstants[sizeStr]; ok {
 				size = knownSize
 			} else {
-				if _, err := fmt.Fprintf(os.Stderr, "Warning: Unknown array size constant: %s\n", sizeStr); err != nil {
-					// Log error but continue processing
-					log.Printf("Failed to write warning to stderr: %v", err)
-				}
-				return nil
+				logger.Warn("Unknown array size constant: %s at line %d", sizeStr, lineNum)
+				return nil, nil
 			}
 		}
 
@@ -299,7 +536,7 @@ func parseField(line string) *StructField {
 			GoType:   fmt.Sprintf("[%d]%s", size, goType),
 			IsArray:  true,
 			ArrayLen: size,
-		}
+		}, nil
 	}
 
 	// Match regular fields: type name
@@ -311,18 +548,15 @@ func parseField(line string) *StructField {
 			Name:   toGoFieldName(name),
 			CType:  cType,
 			GoType: cToGoType(cType),
-		}
+		}, nil
 	}
 
 	// If we couldn't parse, log it for debugging
 	if line != "" {
-		if _, err := fmt.Fprintf(os.Stderr, "Warning: Could not parse field: %q\n", line); err != nil {
-			// Log error but continue processing
-			log.Printf("Failed to write warning to stderr: %v", err)
-		}
+		logger.Debug("Could not parse field at line %d: %q", lineNum, line)
 	}
 
-	return nil
+	return nil, nil
 }
 
 func cToGoType(cType string) string {
