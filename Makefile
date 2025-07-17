@@ -8,7 +8,7 @@ LOCALBIN ?= $(ROOT)/bin
 DIST ?= $(ROOT)/dist
 
 GO_OS ?= linux
-GO_ARCH ?= $(shell go env GOARCH)
+GOARCH ?= $(shell go env GOARCH)
 GO_TOOLCHAIN ?= $(shell grep -oE "^toolchain go[[:digit:]]*\.[[:digit:]]*\.+[[:digit:]]*" go.mod | cut -d ' ' -f2)
 
 # Image URL to use all building/pushing image targets
@@ -59,8 +59,14 @@ clean: clean-ebpf ## Removes build artifacts.
 .PHONY: generate
 generate: manifests generate-ebpf-types generate-ebpf-bindings ## Generate all artifacts
 
+.PHONY: ebpf-typegen
+ebpf-typegen: ## Build the ebpf-typegen tool
+	@echo "Building ebpf-typegen tool..."
+	@mkdir -p $(LOCALBIN)
+	@go build -o $(LOCALBIN)/ebpf-typegen $(ROOT)/tools/ebpf-typegen/main.go
+
 .PHONY: generate-ebpf-types
-generate-ebpf-types: ## Generate Go types from eBPF header files
+generate-ebpf-types: ebpf-typegen ## Generate Go types from eBPF header files
 	@echo "Generating Go types from eBPF headers..."
 	@$(ROOT)/scripts/generate-ebpf-types.sh
 
@@ -125,7 +131,7 @@ EBPF_OBJECTS := $(patsubst $(EBPF_SRC_DIR)/%.bpf.c,$(EBPF_BUILD_DIR)/%.bpf.o,$(E
 # Clang flags for eBPF compilation
 CLANG ?= clang
 CLANG_FLAGS := -O2 -g -Wall -Werror -target bpf \
-	-D__TARGET_ARCH_$(GO_ARCH) \
+	-D__TARGET_ARCH_$(GOARCH) \
 	-D__BPF_TRACING__ \
 	$(EBPF_INCLUDES)
 
@@ -190,7 +196,7 @@ docker.builder:
 .PHONY: docker-build
 docker-build: docker.builder build ## Build docker image for current GOOS and GOARCH.
 	DOCKER_BUILDKIT=1 docker buildx build \
-		--platform ${GO_OS}/${GO_ARCH} \
+		--platform ${GO_OS}/${GOARCH} \
 		-t ${IMG} \
 		-f $(ROOT)/Dockerfile \
 		${BUILD_ARGS} \

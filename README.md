@@ -16,7 +16,7 @@ We publish Docker images for each new release on [DockerHub](https://hub.docker.
 We build linux/amd64 and linux/arm64 images.
 
 ## Support
-For questions and support feel free to post a Github Issue.
+For questions and support feel free to post a GitHub Issue.
 For commercial support, contact us at support@antimetal.com.
 
 ## License
