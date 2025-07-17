@@ -8,13 +8,13 @@ OUTPUT := ../internal/ebpf
 LIBBPF_HEADERS := /usr/include/bpf
 ARCH := $(shell uname -m | sed 's/x86_64/x86/' | sed 's/aarch64/arm64/')
 
-# Docker image for Darwin builds
+# Docker image for non-Linux builds
 DOCKER_IMAGE := ebpf-build
 # Mount the parent directory to allow access to ../internal/ebpf
 DOCKER_RUN := docker run --rm -v $(shell cd .. && pwd):/workspace -w /workspace/ebpf $(DOCKER_IMAGE)
 
-# Use Docker on Darwin, native tools on Linux
-ifeq ($(OS),Darwin)
+# Use Docker on non-Linux platforms, native tools on Linux
+ifneq ($(OS),Linux)
 	CLANG := $(DOCKER_RUN) clang
 	LLC := $(DOCKER_RUN) llc
 	BPFTOOL := $(DOCKER_RUN) /usr/local/bin/bpftool
@@ -43,10 +43,10 @@ all: $(BPF_PROGS)
 $(OUTPUT):
 	@mkdir -p $(OUTPUT)
 
-# Check if Docker image exists (Darwin only)
+# Check if Docker image exists (non-Linux platforms)
 .PHONY: docker-build-check
 docker-build-check:
-ifeq ($(OS),Darwin)
+ifneq ($(OS),Linux)
 	@if ! docker images | grep -q "^$(DOCKER_IMAGE) "; then \
 		echo "Docker image $(DOCKER_IMAGE) not found. Building..."; \
 		$(MAKE) docker-build; \
@@ -57,8 +57,8 @@ endif
 define build_bpf
 $(1): $(OUTPUT) src/$(1).bpf.c docker-build-check
 	@echo "Building eBPF program: $(1)"
-ifeq ($(OS),Darwin)
-	@echo "Using Docker for Darwin build"
+ifneq ($(OS),Linux)
+	@echo "Using Docker for non-Linux build"
 	@$(MKDIR) $(OUTPUT)/$(1)
 	@$(DOCKER_RUN) sh -c "clang $(CFLAGS) $(INCLUDES) -c src/$(1).bpf.c -o $(OUTPUT)/$(1)/$(1).bpf.o && \
 		cd $(OUTPUT)/$(1) && \
@@ -83,26 +83,26 @@ clean:
 	@echo "Cleaning eBPF build artifacts"
 	@rm -rf $(OUTPUT)/*/
 
-# Build Docker image for Darwin
+# Build Docker image for non-Linux platforms
 .PHONY: docker-build
 docker-build:
 	@if docker images | grep -q "^$(DOCKER_IMAGE) "; then \
 		echo "Docker image $(DOCKER_IMAGE) already exists. Use 'make docker-rebuild' to force rebuild"; \
 	else \
 		echo "Building Docker image for eBPF development"; \
-		docker build -t $(DOCKER_IMAGE) .; \
+		docker build -t $(DOCKER_IMAGE) -f Dockerfile.builder .; \
 	fi
 
 # Force rebuild Docker image
 .PHONY: docker-rebuild
 docker-rebuild:
 	@echo "Force rebuilding Docker image for eBPF development"
-	docker build -t $(DOCKER_IMAGE) .
+	docker build -t $(DOCKER_IMAGE) -f Dockerfile.builder .
 
 # Verify BPF programs (Linux only)
 .PHONY: verify
 verify: all
-ifeq ($(OS),Darwin)
+ifneq ($(OS),Linux)
 	@echo "Verify target is only available on Linux"
 	@exit 1
 else
@@ -121,7 +121,7 @@ endif
 help:
 	@echo "Available targets:"
 	@echo "  all         - Build all eBPF programs (.o and .h files)"
-ifeq ($(OS),Darwin)
+ifneq ($(OS),Linux)
 	@echo "  docker-build - Build Docker image if it doesn't exist"
 	@echo "  docker-rebuild - Force rebuild Docker image"
 endif
@@ -130,8 +130,8 @@ endif
 	@echo "  help        - Show this help message"
 	@echo ""
 	@echo "Programs: $(BPF_PROGS)"
-ifeq ($(OS),Darwin)
+ifneq ($(OS),Linux)
 	@echo ""
-	@echo "Note: Running on Darwin - builds will use Docker automatically"
+	@echo "Note: Running on non-Linux platform - builds will use Docker automatically"
 	@echo "Docker image will be built on first use if it doesn't exist"
 endif

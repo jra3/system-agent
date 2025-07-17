@@ -124,14 +124,17 @@ CLANG_FLAGS := -O2 -g -Wall -Werror -target bpf \
 	-D__BPF_TRACING__ \
 	$(EBPF_INCLUDES)
 
-.PHONY: build-ebpf
-build-ebpf: ## Build all eBPF programs
-ifeq ($(shell uname -s),Darwin)
-	@echo "Detected macOS, using Docker for eBPF build..."
-	@$(MAKE) build-ebpf-docker
+# Define eBPF builder based on platform
+ifneq ($(shell uname -s),Linux)
+$(info ebpf-builder=docker)
+EBPF_BUILDER=docker
 else
-	@$(MAKE) build-ebpf-native
+$(info ebpf-builder=native)
+EBPF_BUILDER=native
 endif
+
+.PHONY: build-ebpf
+build-ebpf: build-ebpf-$(EBPF_BUILDER) ## Build all eBPF programs
 
 .PHONY: build-ebpf-native
 build-ebpf-native: $(EBPF_BUILD_DIR) $(EBPF_OBJECTS) ## Build eBPF programs natively (Linux only)
@@ -150,7 +153,7 @@ build-ebpf-docker: ## Build eBPF programs using Docker (for consistent build env
 	@echo "Building eBPF programs in Docker..."
 	@if ! docker images antimetal/ebpf-builder --format "{{.Repository}}" | grep -q "antimetal/ebpf-builder"; then \
 		echo "Docker image not found, building antimetal/ebpf-builder..."; \
-		docker build -t antimetal/ebpf-builder -f $(EBPF_DIR)/Dockerfile $(EBPF_DIR); \
+		docker build -t antimetal/ebpf-builder -f $(EBPF_DIR)/Dockerfile.builder $(EBPF_DIR); \
 	else \
 		echo "Using existing antimetal/ebpf-builder image"; \
 	fi
@@ -159,7 +162,7 @@ build-ebpf-docker: ## Build eBPF programs using Docker (for consistent build env
 .PHONY: build-ebpf-builder
 build-ebpf-builder: ## Force rebuild the eBPF builder Docker image
 	@echo "Building antimetal/ebpf-builder Docker image..."
-	@docker build -t antimetal/ebpf-builder -f $(EBPF_DIR)/Dockerfile $(EBPF_DIR)
+	@docker build -t antimetal/ebpf-builder -f $(EBPF_DIR)/Dockerfile.builder $(EBPF_DIR)
 
 .PHONY: clean-ebpf
 clean-ebpf: ## Clean eBPF build artifacts
