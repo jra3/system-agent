@@ -161,8 +161,6 @@ $(EBPF_BUILD_DIR):
 $(EBPF_BUILD_DIR)/%.bpf.o: $(EBPF_SRC_DIR)/%.bpf.c
 	@echo "Building eBPF program: $<"
 	$(CLANG) $(CLANG_FLAGS) -c $< -o $@
-	@echo "Generating skeleton for: $@"
-	bpftool gen skeleton $@ > $(EBPF_BUILD_DIR)/$*.skel.h
 
 .PHONY: build-ebpf-docker
 build-ebpf-docker: ## Build eBPF programs using Docker (for consistent build environment)
