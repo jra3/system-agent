@@ -33,3 +33,8 @@ dist/
 *.bpf.o
 ebpf/build/
 internal/ebpf/*/
+
+# Generated type definitions from eBPF headers
+pkg/performance/collectors/*_types.go
+# Generated from build machine
+ebpf/include/vmlinux.h

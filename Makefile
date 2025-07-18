@@ -120,64 +120,22 @@ vendor:
 
 # eBPF build configuration
 EBPF_DIR ?= $(ROOT)/ebpf
-EBPF_SRC_DIR ?= $(EBPF_DIR)/src
-EBPF_BUILD_DIR ?= $(EBPF_DIR)/build
-EBPF_INCLUDES ?= -I$(EBPF_DIR)/include -I/usr/include
-
-# Find all eBPF source files
-EBPF_SOURCES := $(wildcard $(EBPF_SRC_DIR)/*.bpf.c)
-EBPF_OBJECTS := $(patsubst $(EBPF_SRC_DIR)/%.bpf.c,$(EBPF_BUILD_DIR)/%.bpf.o,$(EBPF_SOURCES))
-
-# Clang flags for eBPF compilation
-CLANG ?= clang
-CLANG_FLAGS := -O2 -g -Wall -Werror -target bpf \
-	-D__TARGET_ARCH_$(GOARCH) \
-	-D__BPF_TRACING__ \
-	$(EBPF_INCLUDES)
-
-# Define eBPF builder based on platform
-ifneq ($(shell uname -s),Linux)
-$(info ebpf-builder=docker)
-EBPF_BUILDER=docker
-else
-$(info ebpf-builder=native)
-EBPF_BUILDER=native
-endif
 
 .PHONY: build-ebpf
-build-ebpf: build-ebpf-$(EBPF_BUILDER) ## Build all eBPF programs
-
-.PHONY: build-ebpf-native
-build-ebpf-native: $(EBPF_BUILD_DIR) $(EBPF_OBJECTS) ## Build eBPF programs natively (Linux only)
-
-$(EBPF_BUILD_DIR):
-	@mkdir -p $(EBPF_BUILD_DIR)
-
-$(EBPF_BUILD_DIR)/%.bpf.o: $(EBPF_SRC_DIR)/%.bpf.c
-	@echo "Building eBPF program: $<"
-	$(CLANG) $(CLANG_FLAGS) -c $< -o $@
-	@echo "Generating skeleton for: $@"
-	bpftool gen skeleton $@ > $(EBPF_BUILD_DIR)/$*.skel.h
+build-ebpf: ## Build all eBPF programs
+	@$(MAKE) -C $(EBPF_DIR) all
 
 .PHONY: build-ebpf-docker
-build-ebpf-docker: ## Build eBPF programs using Docker (for consistent build environment)
-	@echo "Building eBPF programs in Docker..."
-	@if ! docker images antimetal/ebpf-builder --format "{{.Repository}}" | grep -q "antimetal/ebpf-builder"; then \
-		echo "Docker image not found, building antimetal/ebpf-builder..."; \
-		docker build -t antimetal/ebpf-builder -f $(EBPF_DIR)/Dockerfile.builder $(EBPF_DIR); \
-	else \
-		echo "Using existing antimetal/ebpf-builder image"; \
-	fi
-	@docker run --rm -v $(ROOT):/workspace -w /workspace antimetal/ebpf-builder make build-ebpf-native
+build-ebpf-docker: ## Build eBPF programs using Docker
+	@$(MAKE) -C $(EBPF_DIR) docker-build-check all
 
 .PHONY: build-ebpf-builder
 build-ebpf-builder: ## Force rebuild the eBPF builder Docker image
-	@echo "Building antimetal/ebpf-builder Docker image..."
-	@docker build -t antimetal/ebpf-builder -f $(EBPF_DIR)/Dockerfile.builder $(EBPF_DIR)
+	@$(MAKE) -C $(EBPF_DIR) docker-build
 
 .PHONY: clean-ebpf
 clean-ebpf: ## Clean eBPF build artifacts
-	rm -rf $(EBPF_BUILD_DIR)
+	@$(MAKE) -C $(EBPF_DIR) clean
 
 ##@ Build
 
