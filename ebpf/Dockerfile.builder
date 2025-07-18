@@ -28,7 +28,6 @@ RUN git clone https://github.com/libbpf/bpftool.git /tmp/bpftool && \
     cd / && \
     rm -rf /tmp/bpftool
 
-# Copy script for downloading BTF
 COPY scripts/download-btf.sh /tmp/download-btf.sh
 
 # Download pre-generated vmlinux.h from btfhub
