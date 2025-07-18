@@ -8,7 +8,7 @@ LOCALBIN ?= $(ROOT)/bin
 DIST ?= $(ROOT)/dist
 
 GO_OS ?= linux
-GO_ARCH ?= $(shell go env GOARCH)
+GOARCH ?= $(shell go env GOARCH)
 GO_TOOLCHAIN ?= $(shell grep -oE "^toolchain go[[:digit:]]*\.[[:digit:]]*\.+[[:digit:]]*" go.mod | cut -d ' ' -f2)
 
 # Image URL to use all building/pushing image targets
@@ -49,7 +49,7 @@ help: ## Display this help.
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
 .PHONY: clean
-clean: ## Removes build artifacts.
+clean: clean-ebpf ## Removes build artifacts.
 	rm -rf $(LOCALBIN)
 	rm -rf $(DIST)
 	rm -f $(TESTCOVERAGE_OUT)
@@ -57,7 +57,23 @@ clean: ## Removes build artifacts.
 ##@ Development
 
 .PHONY: generate
-generate: manifests ## Generate all artifacts
+generate: manifests generate-ebpf-types generate-ebpf-bindings ## Generate all artifacts
+
+.PHONY: ebpf-typegen
+ebpf-typegen: ## Build the ebpf-typegen tool
+	@echo "Building ebpf-typegen tool..."
+	@mkdir -p $(LOCALBIN)
+	@go build -o $(LOCALBIN)/ebpf-typegen $(ROOT)/tools/ebpf-typegen/main.go
+
+.PHONY: generate-ebpf-types
+generate-ebpf-types: ebpf-typegen ## Generate Go types from eBPF header files
+	@echo "Generating Go types from eBPF headers..."
+	@$(ROOT)/scripts/generate-ebpf-types.sh
+
+.PHONY: generate-ebpf-bindings
+generate-ebpf-bindings: ## Generate Go bindings from eBPF C code
+	@echo "Generating Go bindings from eBPF C code..."
+	go generate $(ROOT)/pkg/ebpf/...
 
 .PHONY: gen-check
 gen-check: generate ## Check if generated files are up to date.
@@ -100,13 +116,76 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes.
 vendor:
 	go mod vendor
 
+##@ eBPF
+
+# eBPF build configuration
+EBPF_DIR ?= $(ROOT)/ebpf
+EBPF_SRC_DIR ?= $(EBPF_DIR)/src
+EBPF_BUILD_DIR ?= $(EBPF_DIR)/build
+EBPF_INCLUDES ?= -I$(EBPF_DIR)/include -I/usr/include
+
+# Find all eBPF source files
+EBPF_SOURCES := $(wildcard $(EBPF_SRC_DIR)/*.bpf.c)
+EBPF_OBJECTS := $(patsubst $(EBPF_SRC_DIR)/%.bpf.c,$(EBPF_BUILD_DIR)/%.bpf.o,$(EBPF_SOURCES))
+
+# Clang flags for eBPF compilation
+CLANG ?= clang
+CLANG_FLAGS := -O2 -g -Wall -Werror -target bpf \
+	-D__TARGET_ARCH_$(GOARCH) \
+	-D__BPF_TRACING__ \
+	$(EBPF_INCLUDES)
+
+# Define eBPF builder based on platform
+ifneq ($(shell uname -s),Linux)
+$(info ebpf-builder=docker)
+EBPF_BUILDER=docker
+else
+$(info ebpf-builder=native)
+EBPF_BUILDER=native
+endif
+
+.PHONY: build-ebpf
+build-ebpf: build-ebpf-$(EBPF_BUILDER) ## Build all eBPF programs
+
+.PHONY: build-ebpf-native
+build-ebpf-native: $(EBPF_BUILD_DIR) $(EBPF_OBJECTS) ## Build eBPF programs natively (Linux only)
+
+$(EBPF_BUILD_DIR):
+	@mkdir -p $(EBPF_BUILD_DIR)
+
+$(EBPF_BUILD_DIR)/%.bpf.o: $(EBPF_SRC_DIR)/%.bpf.c
+	@echo "Building eBPF program: $<"
+	$(CLANG) $(CLANG_FLAGS) -c $< -o $@
+	@echo "Generating skeleton for: $@"
+	bpftool gen skeleton $@ > $(EBPF_BUILD_DIR)/$*.skel.h
+
+.PHONY: build-ebpf-docker
+build-ebpf-docker: ## Build eBPF programs using Docker (for consistent build environment)
+	@echo "Building eBPF programs in Docker..."
+	@if ! docker images antimetal/ebpf-builder --format "{{.Repository}}" | grep -q "antimetal/ebpf-builder"; then \
+		echo "Docker image not found, building antimetal/ebpf-builder..."; \
+		docker build -t antimetal/ebpf-builder -f $(EBPF_DIR)/Dockerfile.builder $(EBPF_DIR); \
+	else \
+		echo "Using existing antimetal/ebpf-builder image"; \
+	fi
+	@docker run --rm -v $(ROOT):/workspace -w /workspace antimetal/ebpf-builder make build-ebpf-native
+
+.PHONY: build-ebpf-builder
+build-ebpf-builder: ## Force rebuild the eBPF builder Docker image
+	@echo "Building antimetal/ebpf-builder Docker image..."
+	@docker build -t antimetal/ebpf-builder -f $(EBPF_DIR)/Dockerfile.builder $(EBPF_DIR)
+
+.PHONY: clean-ebpf
+clean-ebpf: ## Clean eBPF build artifacts
+	rm -rf $(EBPF_BUILD_DIR)
+
 ##@ Build
 
-build: goreleaser vendor manifests fmt vet ## Build agent binary for current GOOS and GOARCH.
+build: goreleaser vendor manifests fmt vet build-ebpf ## Build agent binary for current GOOS and GOARCH.
 	GOOS=$(GO_OS) $(GORELEASER) build --snapshot --clean --single-target
 
 .PHONY: build-all
-build-all: goreleaser manifests fmt vet ## Build agent binary for all platforms.
+build-all: goreleaser manifests fmt vet build-ebpf ## Build agent binary for all platforms.
 	$(GORELEASER) build --snapshot --clean
 
 .PHONY: docker.builder
@@ -117,7 +196,7 @@ docker.builder:
 .PHONY: docker-build
 docker-build: docker.builder build ## Build docker image for current GOOS and GOARCH.
 	DOCKER_BUILDKIT=1 docker buildx build \
-		--platform ${GO_OS}/${GO_ARCH} \
+		--platform ${GO_OS}/${GOARCH} \
 		-t ${IMG} \
 		-f $(ROOT)/Dockerfile \
 		${BUILD_ARGS} \

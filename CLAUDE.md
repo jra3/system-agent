@@ -367,6 +367,31 @@ kubectl describe deployment -n antimetal-system agent
 - **Context cancellation** for graceful shutdowns
 - **Memory pooling** for high-frequency operations
 
+## eBPF Development
+
+### Adding New eBPF Programs
+For new `.bpf.c` files:
+1. Create `ebpf/src/your_program.bpf.c`
+2. Add `//go:generate` directive to the relevant userspace package that will use the eBPF program:
+   ```go
+   //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang YourProgram ../../ebpf/src/your_program.bpf.c
+   ```
+3. Run `make generate-ebpf-bindings`
+
+For new struct definitions:
+1. Create `ebpf/include/your_collector_types.h` with C structs
+2. Run `make generate-ebpf-types` to generate Go types
+3. Generated files appear in `pkg/performance/collectors/`
+
+### eBPF Commands
+- `make generate-ebpf-bindings` - Generate Go bindings from eBPF C code
+- `make generate-ebpf-types` - Generate Go types from eBPF header files
+- `make build-ebpf` - Build eBPF programs (uses Docker on non-Linux)
+- `make build-ebpf-builder` - Build eBPF Docker image
+
+### Generation Pattern
+Place `//go:generate` directives in the userspace packages that will use the eBPF programs, rather than in a centralized location. This keeps the generation logic co-located with the code that uses it.
+
 ## Future Extensibility
 
 ### Planned Features
