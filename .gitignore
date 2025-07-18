@@ -29,7 +29,6 @@ dist/
 *_bpfe*.go
 *_bpfe*.o
 *.bpf.go
-*.bpf.h
 *.bpf.o
 ebpf/build/
 ebpf/include/vmlinux.h
