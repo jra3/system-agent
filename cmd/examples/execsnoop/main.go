@@ -21,22 +21,16 @@ import (
 )
 
 func main() {
-	// Parse command line flags
 	bpfPath := flag.String("bpf-path", "", "Path to execsnoop.bpf.o file (defaults to /usr/local/lib/antimetal/ebpf/execsnoop.bpf.o)")
 	flag.Parse()
 
-	// Create logger
 	logger := logr.Discard()
 
-	// Create collector
 	collector, err := collectors.NewExecSnoopCollector(logger, performance.DefaultCollectionConfig(), *bpfPath)
 	if err != nil {
 		log.Fatalf("Failed to create collector: %v", err)
 	}
 
-	fmt.Println("Tracing process executions... Press Ctrl+C to stop.")
-
-	// Setup signal handling
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -48,7 +42,7 @@ func main() {
 		cancel()
 	}()
 
-	// Start collector
+	fmt.Println("Tracing process executions... Press Ctrl+C to stop.")
 	eventChan, err := collector.Start(ctx)
 	if err != nil {
 		log.Fatalf("Failed to start collector: %v", err)
