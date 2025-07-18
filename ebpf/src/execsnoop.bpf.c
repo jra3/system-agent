@@ -28,7 +28,7 @@ struct {
     __type(value, struct event);
 } execs SEC(".maps");
 
-// Use percpu array to avoid stack issues
+// Use percpu array to avoid stack limit issues (struct event is >512 bytes)
 struct {
     __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
     __uint(max_entries, 1);
@@ -54,12 +54,13 @@ int tracepoint__syscalls__sys_enter_execve(struct trace_event_raw_sys_enter *ctx
     uid = (u32)bpf_get_current_uid_gid();
     pid = bpf_get_current_pid_tgid() >> 32;
 
-    // Get temporary event from percpu array
+    // "Allocate" temporary event in heap
     event = bpf_map_lookup_elem(&heap, &zero);
-    if (!event)
+    if (!event) {
         return 0;
-        
-    // Initialize key fields only (avoid memset)
+    }
+
+    // Initialize key fields only
     event->base.pid = 0;
     event->base.ppid = 0;
     event->base.uid = 0;
@@ -72,9 +73,6 @@ int tracepoint__syscalls__sys_enter_execve(struct trace_event_raw_sys_enter *ctx
     event->base.pid = pid;
     event->base.ppid = BPF_CORE_READ(task, real_parent, tgid);
     event->base.uid = uid;
-    
-    // Get the command name from current task for now
-    bpf_get_current_comm(&event->base.comm, sizeof(event->base.comm));
     
     event->base.args_count = 0;
     event->base.args_size = 0;
@@ -92,17 +90,20 @@ int tracepoint__syscalls__sys_enter_execve(struct trace_event_raw_sys_enter *ctx
     for (i = 0; i < DEFAULT_MAXARGS && i < max_args; i++) {
         argp = NULL;
         bpf_probe_read_user(&argp, sizeof(argp), &args[i]);
-        if (!argp)
+        if (!argp) {
             break;
+        }
 
         // Ensure we have enough space for at least one more arg
-        if (event->base.args_size >= FULL_MAX_ARGS_ARR - ARGSIZE)
+        if (event->base.args_size >= FULL_MAX_ARGS_ARR - ARGSIZE) {
             break;
+        }
 
         // Calculate remaining space
         int remaining_space = FULL_MAX_ARGS_ARR - event->base.args_size;
+        // Truncate if necessary
         int read_size = remaining_space < ARGSIZE ? remaining_space : ARGSIZE;
-
+        // Concat the argument to the args array
         int ret = bpf_probe_read_user_str(&event->args[event->base.args_size], 
                                           read_size, argp);
         if (ret > 0) {
@@ -128,19 +129,21 @@ int tracepoint__syscalls__sys_exit_execve(struct trace_event_raw_sys_exit *ctx)
 
     pid = bpf_get_current_pid_tgid() >> 32;
     event = bpf_map_lookup_elem(&execs, &pid);
-    if (!event)
+    if (!event) {
+        // Didn't find the event, likely due to a missed sys_enter_execve
         return 0;
+    }
 
     event->base.retval = ctx->ret;
 
-    // Always allocate the maximum size for the verifier
     e = bpf_ringbuf_reserve(&events, sizeof(struct event), 0);
     if (!e) {
+        // If we can't reserve space, we need to clean up the event and quit
         bpf_map_delete_elem(&execs, &pid);
         return 0;
     }
 
-    // Copy fixed fields
+    // Copy all our data in the ring buffer
     e->base.pid = event->base.pid;
     e->base.ppid = event->base.ppid;
     e->base.uid = event->base.uid;
@@ -148,17 +151,14 @@ int tracepoint__syscalls__sys_exit_execve(struct trace_event_raw_sys_exit *ctx)
     e->base.args_count = event->base.args_count;
     e->base.args_size = event->base.args_size;
     
-    // Copy comm using bpf_probe_read
-    bpf_probe_read_kernel(e->base.comm, sizeof(e->base.comm), event->base.comm);
+    // Capture the new command name after execve
+    bpf_get_current_comm(&e->base.comm, sizeof(e->base.comm));
     
-    // Copy args data using bpf_probe_read
     if (event->base.args_size > 0 && event->base.args_size <= FULL_MAX_ARGS_ARR) {
         bpf_probe_read_kernel(e->args, event->base.args_size, event->args);
     }
-    
-    // Submit only the actual size used
+
     bpf_ringbuf_submit(e, 0);
     bpf_map_delete_elem(&execs, &pid);
-
     return 0;
 }

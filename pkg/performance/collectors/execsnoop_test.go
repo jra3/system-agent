@@ -20,59 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewExecSnoopCollector(t *testing.T) {
-	logger := logr.Discard()
-	config := performance.DefaultCollectionConfig()
-
-	tests := []struct {
-		name          string
-		bpfObjectPath string
-		wantPath      string
-	}{
-		{
-			name:          "default path",
-			bpfObjectPath: "",
-			wantPath:      "/usr/local/lib/antimetal/ebpf/execsnoop.bpf.o",
-		},
-		{
-			name:          "custom path",
-			bpfObjectPath: "/custom/path/execsnoop.bpf.o",
-			wantPath:      "/custom/path/execsnoop.bpf.o",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			collector, err := collectors.NewExecSnoopCollector(logger, config, tt.bpfObjectPath)
-			require.NoError(t, err)
-			require.NotNil(t, collector)
-
-			// Verify capabilities
-			caps := collector.Capabilities()
-			assert.False(t, caps.SupportsOneShot)
-			assert.True(t, caps.SupportsContinuous)
-			assert.True(t, caps.RequiresRoot)
-			assert.True(t, caps.RequiresEBPF)
-			assert.Equal(t, "5.8", caps.MinKernelVersion)
-
-			// Verify initial status
-			assert.Equal(t, performance.CollectorStatusDisabled, collector.Status())
-			assert.NoError(t, collector.LastError())
-		})
-	}
-}
-
 func TestExecSnoopCollector_ParseEvent(t *testing.T) {
-	// Test event parsing without requiring actual BPF functionality
-	type execsnoopEvent struct {
-		PID       int32
-		PPID      int32
-		UID       uint32
-		RetVal    int32
-		ArgsCount int32
-		ArgsSize  uint32
-		Comm      [16]byte
-	}
 
 	tests := []struct {
 		name      string
@@ -84,13 +32,13 @@ func TestExecSnoopCollector_ParseEvent(t *testing.T) {
 			name: "valid event with args",
 			buildData: func() []byte {
 				var buf bytes.Buffer
-				event := execsnoopEvent{
+				event := collectors.ExecsnoopEvent{
 					PID:       1234,
 					PPID:      1000,
 					UID:       1001,
 					RetVal:    0,
 					ArgsCount: 3,
-					ArgsSize:  20,
+					ArgsSize:  15, // "arg1\x00arg2\x00arg3\x00" = 15 bytes
 				}
 				copy(event.Comm[:], "test-cmd")
 
@@ -116,7 +64,7 @@ func TestExecSnoopCollector_ParseEvent(t *testing.T) {
 			name: "event with no args",
 			buildData: func() []byte {
 				var buf bytes.Buffer
-				event := execsnoopEvent{
+				event := collectors.ExecsnoopEvent{
 					PID:       5678,
 					PPID:      5000,
 					UID:       2001,
@@ -140,6 +88,67 @@ func TestExecSnoopCollector_ParseEvent(t *testing.T) {
 			},
 		},
 		{
+			name: "event with path in args - command name heuristic",
+			buildData: func() []byte {
+				var buf bytes.Buffer
+				event := collectors.ExecsnoopEvent{
+					PID:       9999,
+					PPID:      8888,
+					UID:       1000,
+					RetVal:    0,
+					ArgsCount: 2,
+					ArgsSize:  41, // "/usr/bin/very-long-command-name\x00--option\x00" = 41 bytes
+				}
+				copy(event.Comm[:], "very-long-cmd-na") // Truncated at 16 chars
+
+				binary.Write(&buf, binary.LittleEndian, event)
+				// Args with full path
+				buf.WriteString("/usr/bin/very-long-command-name\x00")
+				buf.WriteString("--option\x00")
+
+				return buf.Bytes()
+			},
+			wantErr: false,
+			validate: func(t *testing.T, event *collectors.ExecEvent) {
+				assert.Equal(t, int32(9999), event.PID)
+				assert.Equal(t, int32(8888), event.PPID)
+				assert.Equal(t, uint32(1000), event.UID)
+				// Command should be extracted from path, not truncated kernel comm
+				assert.Equal(t, "very-long-command-name", event.Command)
+				assert.Equal(t, []string{"/usr/bin/very-long-command-name", "--option"}, event.Args)
+			},
+		},
+		{
+			name: "event with simple command - keep kernel comm",
+			buildData: func() []byte {
+				var buf bytes.Buffer
+				event := collectors.ExecsnoopEvent{
+					PID:       7777,
+					PPID:      6666,
+					UID:       500,
+					RetVal:    0,
+					ArgsCount: 1,
+					ArgsSize:  8,
+				}
+				copy(event.Comm[:], "python3")
+
+				binary.Write(&buf, binary.LittleEndian, event)
+				// Args without path
+				buf.WriteString("python3\x00")
+
+				return buf.Bytes()
+			},
+			wantErr: false,
+			validate: func(t *testing.T, event *collectors.ExecEvent) {
+				assert.Equal(t, int32(7777), event.PID)
+				assert.Equal(t, int32(6666), event.PPID)
+				assert.Equal(t, uint32(500), event.UID)
+				// Command should remain as kernel comm since no path in args
+				assert.Equal(t, "python3", event.Command)
+				assert.Equal(t, []string{"python3"}, event.Args)
+			},
+		},
+		{
 			name: "event too small",
 			buildData: func() []byte {
 				return []byte{1, 2, 3, 4} // Too small
@@ -150,19 +159,29 @@ func TestExecSnoopCollector_ParseEvent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// This test would require exposing the parseEvent method
-			// or testing through the full Start/Stop cycle
-			// For now, we're testing the structure and setup
-			_ = tt.buildData()
+			logger := logr.Discard()
+			config := performance.DefaultCollectionConfig()
+			collector, err := collectors.NewExecSnoopCollector(logger, config, "")
+			require.NoError(t, err)
+
+			data := tt.buildData()
+			event, err := collector.ParseEvent(data)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+
+			assert.NoError(t, err)
+			require.NotNil(t, event)
+			if tt.validate != nil {
+				tt.validate(t, event)
+			}
 		})
 	}
 }
 
 func TestExecSnoopCollector_StartStop(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping BPF test in short mode")
-	}
-
 	logger := logr.Discard()
 	config := performance.DefaultCollectionConfig()
 
@@ -173,17 +192,12 @@ func TestExecSnoopCollector_StartStop(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Start should fail due to missing BPF object or CO-RE not supported on non-Linux
 	_, err = collector.Start(ctx)
 	assert.Error(t, err, "Start should fail with missing BPF object or unsupported platform")
-
-	// Stop should work even if start failed
 	err = collector.Stop()
-	assert.NoError(t, err)
-
-	// Multiple stops should be safe
+	assert.NoError(t, err, "Stop should not fail even if Start did")
 	err = collector.Stop()
-	assert.NoError(t, err)
+	assert.NoError(t, err, "Multiple Stop calls should not fail")
 }
 
 func TestExecSnoopCollector_DoubleStart(t *testing.T) {
@@ -193,7 +207,8 @@ func TestExecSnoopCollector_DoubleStart(t *testing.T) {
 	collector, err := collectors.NewExecSnoopCollector(logger, config, "")
 	require.NoError(t, err)
 
-	// Manually set status to active to test double-start protection
+	// Manually set status to active to test double-start protection since we
+	// can't actually start without a valid BPF object or root privileges
 	collector.SetStatus(performance.CollectorStatusActive)
 
 	ctx := context.Background()

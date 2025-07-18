@@ -229,7 +229,7 @@ func (c *ExecSnoopCollector) readEvents(ctx context.Context) {
 				continue
 			}
 
-			event, err := c.parseEvent(record.RawSample)
+			event, err := c.ParseEvent(record.RawSample)
 			if err != nil {
 				c.Logger().Error(err, "parsing event")
 				continue
@@ -249,7 +249,7 @@ func (c *ExecSnoopCollector) readEvents(ctx context.Context) {
 	}
 }
 
-func (c *ExecSnoopCollector) parseEvent(data []byte) (*ExecEvent, error) {
+func (c *ExecSnoopCollector) ParseEvent(data []byte) (*ExecEvent, error) {
 	if len(data) < int(unsafe.Sizeof(ExecsnoopEvent{})) {
 		return nil, fmt.Errorf("event too small: %d bytes", len(data))
 	}
