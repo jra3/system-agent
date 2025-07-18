@@ -30,6 +30,8 @@ endif
 
 # Compiler flags
 INCLUDES := -I$(LIBBPF_HEADERS) -I./include
+# Ensure vmlinux.h is available for native Linux builds
+VMLINUX_H := ./include/vmlinux.h
 # CO-RE-specific flags:
 # -g: Enable BTF generation (debug info)
 # -O2: Optimization level
@@ -61,9 +63,43 @@ ifneq ($(OS),Linux)
 	fi
 endif
 
+# Generate vmlinux.h from running kernel BTF (Linux only)
+$(VMLINUX_H):
+ifeq ($(OS),Linux)
+	@echo "Generating vmlinux.h from kernel BTF"
+	@if [ -f /sys/kernel/btf/vmlinux ]; then \
+		$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > $(VMLINUX_H) && \
+		echo "Generated vmlinux.h with $$(wc -l < $(VMLINUX_H)) lines"; \
+	else \
+		echo "Kernel BTF not available, using btfhub fallback"; \
+		$(MAKE) vmlinux-btfhub; \
+	fi
+else
+	@echo "vmlinux.h generation skipped on non-Linux platform"
+endif
+
+# Fallback: Download vmlinux.h from btfhub (for older kernels)
+.PHONY: vmlinux-btfhub
+vmlinux-btfhub:
+	@echo "Downloading pre-generated vmlinux.h from btfhub"
+	@KERNEL_VERSION=$$(uname -r) && \
+	ARCH=$$(uname -m) && \
+	case "$$ARCH" in \
+		x86_64) BTF_ARCH="amd64" ;; \
+		aarch64) BTF_ARCH="arm64" ;; \
+		*) echo "Unsupported architecture: $$ARCH" && exit 1 ;; \
+	esac && \
+	BTF_URL="https://github.com/aquasecurity/btfhub-archive/raw/main/ubuntu/20.04/$$BTF_ARCH/5.8.0-63-generic.btf.tar.xz" && \
+	echo "Downloading BTF from: $$BTF_URL" && \
+	curl -sL "$$BTF_URL" -o /tmp/btf.tar.xz && \
+	tar -xJf /tmp/btf.tar.xz -C /tmp && \
+	$(BPFTOOL) btf dump file /tmp/5.8.0-63-generic.btf format c > $(VMLINUX_H) && \
+	rm -f /tmp/btf.tar.xz /tmp/5.8.0-63-generic.btf && \
+	echo "Generated vmlinux.h with $$(wc -l < $(VMLINUX_H)) lines"
+
 # Generic rule to build eBPF programs
 define build_bpf
-$(1): $(OUTPUT) src/$(1).bpf.c docker-build-check
+$(1): $(OUTPUT) src/$(1).bpf.c $(VMLINUX_H) docker-build-check
 	@echo "Building eBPF program: $(1)"
 ifneq ($(OS),Linux)
 	@echo "Using Docker for non-Linux build"
@@ -95,6 +131,10 @@ $(foreach prog,$(BPF_PROGS),$(eval $(call build_bpf,$(prog))))
 clean:
 	@echo "Cleaning eBPF build artifacts"
 	@rm -rf $(OUTPUT)/*/
+	@if [ -f $(VMLINUX_H) ]; then \
+		echo "Removing generated vmlinux.h"; \
+		rm -f $(VMLINUX_H); \
+	fi
 
 # Build Docker image for non-Linux platforms
 .PHONY: docker-build
@@ -138,11 +178,19 @@ ifneq ($(OS),Linux)
 	@echo "  docker-build - Build Docker image if it doesn't exist"
 	@echo "  docker-rebuild - Force rebuild Docker image"
 endif
-	@echo "  clean       - Remove build artifacts"
+	@echo "  clean       - Remove build artifacts and generated vmlinux.h"
 	@echo "  verify      - Verify eBPF programs can be loaded (Linux only)"
+ifeq ($(OS),Linux)
+	@echo "  vmlinux-btfhub - Force download vmlinux.h from btfhub (fallback)"
+endif
 	@echo "  help        - Show this help message"
 	@echo ""
 	@echo "Programs: $(BPF_PROGS)"
+ifeq ($(OS),Linux)
+	@echo ""
+	@echo "Note: vmlinux.h will be generated from kernel BTF if available"
+	@echo "      Falls back to btfhub if kernel BTF not found"
+endif
 ifneq ($(OS),Linux)
 	@echo ""
 	@echo "Note: Running on non-Linux platform - builds will use Docker automatically"
