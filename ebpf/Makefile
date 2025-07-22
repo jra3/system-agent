@@ -71,9 +71,7 @@ ifneq ($(OS),Linux)
 	@$(DOCKER_RUN) sh -c "/usr/local/bin/ensure-vmlinux.sh && \
 		clang $(CFLAGS) $(INCLUDES) -c src/$(1).bpf.c -o $(OUTPUT)/$(1)/$(1).bpf.o && \
 		echo 'Verifying BTF information for $(1)' && \
-		bpftool btf dump file $(OUTPUT)/$(1)/$(1).bpf.o format raw > /dev/null && \
-		cd $(OUTPUT)/$(1) && \
-		bpftool gen skeleton $(1).bpf.o > $(1).bpf.h"
+		bpftool btf dump file $(OUTPUT)/$(1)/$(1).bpf.o format raw > /dev/null"
 	@echo "Successfully built $(1)"
 else
 	@$(MKDIR) $(OUTPUT)/$(1)
@@ -81,8 +79,6 @@ else
 	@echo "Verifying BTF information for $(1)"
 	$(BPFTOOL) btf dump file $(OUTPUT)/$(1)/$(1).bpf.o format raw > /dev/null || \
 		(echo "Warning: BTF verification failed for $(1)" && exit 1)
-	@echo "Generating skeleton for $(1)"
-	$(CD) $(OUTPUT)/$(1) && $(BPFTOOL) gen skeleton $(1).bpf.o > $(1).bpf.h
 	@echo "Successfully built $(1)"
 endif
 endef
@@ -134,7 +130,7 @@ endif
 .PHONY: help
 help:
 	@echo "Available targets:"
-	@echo "  all         - Build all eBPF programs (.o and .h files)"
+	@echo "  all         - Build all eBPF programs (.o files)"
 ifneq ($(OS),Linux)
 	@echo "  docker-build - Build Docker image if it doesn't exist"
 	@echo "  docker-rebuild - Force rebuild Docker image"
