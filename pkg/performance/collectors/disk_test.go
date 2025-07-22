@@ -47,11 +47,13 @@ const (
 )
 
 // Helper functions following TCP collector patterns
-func createDiskCollector(procPath string) *collectors.DiskCollector {
+func createDiskCollector(t *testing.T, procPath string) *collectors.DiskCollector {
 	config := performance.CollectionConfig{
 		HostProcPath: procPath,
 	}
-	return collectors.NewDiskCollector(logr.Discard(), config)
+	collector, err := collectors.NewDiskCollector(logr.Discard(), config)
+	require.NoError(t, err)
+	return collector
 }
 
 func setupDiskstatsFile(t *testing.T, content string) string {
@@ -78,9 +80,56 @@ func collectDiskStatsWithError(collector *collectors.DiskCollector) error {
 }
 
 // Test basic functionality
+func TestDiskCollector_Constructor(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  performance.CollectionConfig
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "valid absolute path",
+			config: performance.CollectionConfig{
+				HostProcPath: "/proc",
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid relative path",
+			config: performance.CollectionConfig{
+				HostProcPath: "proc",
+			},
+			wantErr: true,
+			errMsg:  "HostProcPath must be an absolute path",
+		},
+		{
+			name: "empty path",
+			config: performance.CollectionConfig{
+				HostProcPath: "",
+			},
+			wantErr: true,
+			errMsg:  "HostProcPath must be an absolute path",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			collector, err := collectors.NewDiskCollector(logr.Discard(), tt.config)
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errMsg)
+				assert.Nil(t, collector)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, collector)
+			}
+		})
+	}
+}
+
 func TestDiskCollector_BasicFunctionality(t *testing.T) {
 	procPath := setupDiskstatsFile(t, validDiskstats)
-	collector := createDiskCollector(procPath)
+	collector := createDiskCollector(t, procPath)
 
 	stats := collectDiskStats(t, collector)
 
@@ -155,7 +204,7 @@ func TestDiskCollector_ErrorHandling(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			procPath := tt.setupFunc()
-			collector := createDiskCollector(procPath)
+			collector := createDiskCollector(t, procPath)
 			err := collectDiskStatsWithError(collector)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), tt.errorMsg)
@@ -227,7 +276,7 @@ func TestDiskCollector_GracefulDegradation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			procPath := setupDiskstatsFile(t, tt.content)
-			collector := createDiskCollector(procPath)
+			collector := createDiskCollector(t, procPath)
 			stats := collectDiskStats(t, collector)
 			tt.validateResult(t, stats)
 		})
@@ -269,7 +318,7 @@ func TestDiskCollector_EdgeCases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			procPath := setupDiskstatsFile(t, tt.content)
-			collector := createDiskCollector(procPath)
+			collector := createDiskCollector(t, procPath)
 			stats := collectDiskStats(t, collector)
 			tt.check(t, stats)
 		})
@@ -324,7 +373,7 @@ func TestDiskCollector_DeviceTypes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			procPath := setupDiskstatsFile(t, tt.content)
-			collector := createDiskCollector(procPath)
+			collector := createDiskCollector(t, procPath)
 			stats := collectDiskStats(t, collector)
 
 			// Verify expected devices are present

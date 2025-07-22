@@ -36,14 +36,16 @@ TcpExt: 10 5 2 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 20 15 0 0 0 0 0 0 0 0 0 0 0 0 0 2
 	validTCP6Header = `  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode`
 )
 
-func createTestTCPCollector(procPath string) *collectors.TCPCollector {
+func createTestTCPCollector(t *testing.T, procPath string) *collectors.TCPCollector {
 	config := performance.CollectionConfig{
 		HostProcPath: procPath,
 		EnabledCollectors: map[performance.MetricType]bool{
 			performance.MetricTypeTCP: true,
 		},
 	}
-	return collectors.NewTCPCollector(logr.Discard(), config)
+	collector, err := collectors.NewTCPCollector(logr.Discard(), config)
+	require.NoError(t, err)
+	return collector
 }
 
 func setupTestFiles(t *testing.T, files map[string]string) string {
@@ -71,6 +73,53 @@ func collectAndValidate(t *testing.T, collector *collectors.TCPCollector) *perfo
 	return stats
 }
 
+func TestTCPCollector_Constructor(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  performance.CollectionConfig
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "valid absolute path",
+			config: performance.CollectionConfig{
+				HostProcPath: "/proc",
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid relative path",
+			config: performance.CollectionConfig{
+				HostProcPath: "proc",
+			},
+			wantErr: true,
+			errMsg:  "HostProcPath must be an absolute path",
+		},
+		{
+			name: "empty path",
+			config: performance.CollectionConfig{
+				HostProcPath: "",
+			},
+			wantErr: true,
+			errMsg:  "HostProcPath must be an absolute path",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			collector, err := collectors.NewTCPCollector(logr.Discard(), tt.config)
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errMsg)
+				assert.Nil(t, collector)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, collector)
+			}
+		})
+	}
+}
+
 func TestTCPCollector_BasicFunctionality(t *testing.T) {
 	files := map[string]string{
 		"snmp":    validSNMPHeader,
@@ -86,7 +135,7 @@ func TestTCPCollector_BasicFunctionality(t *testing.T) {
 	}
 
 	procPath := setupTestFiles(t, files)
-	collector := createTestTCPCollector(procPath)
+	collector := createTestTCPCollector(t, procPath)
 	stats := collectAndValidate(t, collector)
 
 	// Verify SNMP stats
@@ -142,7 +191,7 @@ func TestTCPCollector_MinorFormatVariations(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			procPath := setupTestFiles(t, tt.files)
-			collector := createTestTCPCollector(procPath)
+			collector := createTestTCPCollector(t, procPath)
 			stats := collectAndValidate(t, collector)
 
 			// Basic validation that parsing worked
@@ -196,7 +245,7 @@ Ip: 1 64`,
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			procPath := setupTestFiles(t, tt.files)
-			collector := createTestTCPCollector(procPath)
+			collector := createTestTCPCollector(t, procPath)
 
 			ctx := context.Background()
 			_, err := collector.Collect(ctx)
@@ -266,7 +315,7 @@ TcpExt: NotANumber 456`,
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			procPath := setupTestFiles(t, tt.files)
-			collector := createTestTCPCollector(procPath)
+			collector := createTestTCPCollector(t, procPath)
 			stats := collectAndValidate(t, collector)
 			tt.validateResult(t, stats)
 		})
@@ -334,7 +383,7 @@ Tcp: 1 200 120000 -1 ABC 200 10 5 8 50000 40000 500 2 15 3`,
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			procPath := setupTestFiles(t, tt.files)
-			collector := createTestTCPCollector(procPath)
+			collector := createTestTCPCollector(t, procPath)
 			stats := collectAndValidate(t, collector)
 			tt.check(t, stats)
 		})
@@ -376,7 +425,7 @@ func TestTCPCollector_AllConnectionStates(t *testing.T) {
 	}
 
 	procPath := setupTestFiles(t, files)
-	collector := createTestTCPCollector(procPath)
+	collector := createTestTCPCollector(t, procPath)
 	stats := collectAndValidate(t, collector)
 
 	// Verify each state has exactly one connection
@@ -406,7 +455,7 @@ func TestTCPCollector_LargeFiles(t *testing.T) {
 	}
 
 	procPath := setupTestFiles(t, files)
-	collector := createTestTCPCollector(procPath)
+	collector := createTestTCPCollector(t, procPath)
 	stats := collectAndValidate(t, collector)
 
 	assert.Equal(t, uint64(expectedEstablished), stats.ConnectionsByState["ESTABLISHED"])
