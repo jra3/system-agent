@@ -18,7 +18,7 @@ struct event {
 
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
-    __uint(max_entries, 1 << 24); // 16 MB
+    __uint(max_entries, 1 << 20); // 1 MB
 } events SEC(".maps");
 
 struct {
@@ -57,20 +57,16 @@ int tracepoint__syscalls__sys_enter_execve(struct trace_event_raw_sys_enter *ctx
     if (!event) {
         return 0;
     }
-    event->base.pid = 0;
-    event->base.ppid = 0;
-    event->base.uid = 0;
+    
+    // Initialize event fields
+    event->base.pid = pid;
+    event->base.uid = uid;
     event->base.retval = 0;
     event->base.args_count = 0;
     event->base.args_size = 0;
-    event->base.pid = pid;
-    event->base.uid = uid;
 
     task = (struct task_struct *)bpf_get_current_task();
     event->base.ppid = BPF_CORE_READ(task, real_parent, tgid);
-    
-    event->base.args_count = 0;
-    event->base.args_size = 0;
 
     #pragma unroll
     for (i = 0; i < DEFAULT_MAXARGS && i < max_args; i++) {
@@ -80,18 +76,22 @@ int tracepoint__syscalls__sys_enter_execve(struct trace_event_raw_sys_enter *ctx
             break;
         }
 
-        // Ensure we have enough space for at least one more arg
-        if (event->base.args_size >= FULL_MAX_ARGS_ARR - ARGSIZE) {
-            break;
-        }
         // Calculate remaining space
         int remaining_space = FULL_MAX_ARGS_ARR - event->base.args_size;
-        // Truncate if necessary
+        if (remaining_space <= 0) {
+            break;
+        }
+        
+        // Limit read size to available space
         int read_size = remaining_space < ARGSIZE ? remaining_space : ARGSIZE;
 
         int ret = bpf_probe_read_user_str(&event->args[event->base.args_size], 
                                           read_size, argp);
         if (ret > 0) {
+            // Additional safety check
+            if (event->base.args_size + ret > FULL_MAX_ARGS_ARR) {
+                break;
+            }
             event->base.args_count++;
             event->base.args_size += ret;
         } else {

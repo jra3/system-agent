@@ -29,7 +29,9 @@ jobs:
         # Build description
         DESCRIPTION="GitHub Issue: ${{ github.event.issue.html_url }}
         
-        ${{ github.event.issue.body }}"
+        ${{ toJSON(github.event.issue.body) }}"
+        # Remove the JSON quotes that toJSON adds
+        DESCRIPTION="${DESCRIPTION:1:-1}"
         
         # Use jq to build the GraphQL query with proper JSON escaping
         QUERY=$(jq -n \
