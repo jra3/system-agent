@@ -56,6 +56,21 @@ clean: clean-ebpf ## Removes build artifacts.
 
 ##@ Development
 
+.PHONY: test-collectors
+test-collectors: ## Run collector test utility in KIND cluster
+	go run cmd/collector-test/main.go
+
+.PHONY: test-collectors-kind
+test-collectors-kind: ## Run collector test utility in KIND cluster
+	kubectl exec -n antimetal-system deployment/agent -- /agent test-collectors \
+		--interval=5s \
+		--verbose \
+		--pretty
+
+.PHONY: build-collector-test
+build-collector-test: ## Build collector test binary
+	go build -o $(LOCALBIN)/collector-test cmd/collector-test/main.go
+
 .PHONY: generate
 generate: ## Generate all artifacts
 generate: manifests generate-ebpf-types generate-ebpf-bindings proto

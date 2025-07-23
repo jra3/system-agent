@@ -7,12 +7,20 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
+	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
+	"os/signal"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/go-logr/zapr"
+	zapcore "go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -31,6 +39,7 @@ import (
 	k8sagent "github.com/antimetal/agent/internal/kubernetes/agent"
 	"github.com/antimetal/agent/internal/kubernetes/cluster"
 	"github.com/antimetal/agent/internal/kubernetes/scheme"
+	"github.com/antimetal/agent/pkg/performance"
 	"github.com/antimetal/agent/pkg/resource/store"
 )
 
@@ -113,6 +122,12 @@ func init() {
 }
 
 func main() {
+	// Check for subcommands
+	if len(os.Args) > 1 && os.Args[1] == "test-collectors" {
+		runCollectorTest()
+		return
+	}
+
 	ctx := ctrl.SetupSignalHandler()
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
@@ -260,4 +275,160 @@ func getProviderOptions(logger logr.Logger) cluster.ProviderOptions {
 			ClusterName:  eksClusterName,
 		},
 	}
+}
+
+func runCollectorTest() {
+	// Parse test-collectors specific flags
+	testFlags := flag.NewFlagSet("test-collectors", flag.ExitOnError)
+	interval := testFlags.Duration("interval", 5*time.Second, "Collection interval")
+	verbose := testFlags.Bool("verbose", false, "Enable verbose logging")
+	prettyPrint := testFlags.Bool("pretty", true, "Pretty print JSON output")
+	metricTypes := testFlags.String("metrics", "", "Comma-separated list of metric types to collect (empty for all)")
+
+	testFlags.Parse(os.Args[2:])
+
+	// Setup logger
+	var logger logr.Logger
+	if *verbose {
+		zapLog, _ := zapcore.NewDevelopment()
+		logger = zapr.NewLogger(zapLog)
+	} else {
+		logger = logr.Discard()
+	}
+
+	// Use environment variables from container
+	config := performance.CollectionConfig{
+		HostProcPath: getEnvOrDefault("HOST_PROC", "/proc"),
+		HostSysPath:  getEnvOrDefault("HOST_SYS", "/sys"),
+		HostDevPath:  getEnvOrDefault("HOST_DEV", "/dev"),
+	}
+
+	// Get available metric types from registry
+	availableTypes := []performance.MetricType{
+		performance.MetricTypeLoad,
+		performance.MetricTypeMemory,
+		performance.MetricTypeCPU,
+		performance.MetricTypeProcess,
+		performance.MetricTypeDisk,
+		performance.MetricTypeNetwork,
+		performance.MetricTypeTCP,
+		performance.MetricTypeKernel,
+		performance.MetricTypeCPUInfo,
+		performance.MetricTypeMemoryInfo,
+		performance.MetricTypeDiskInfo,
+		performance.MetricTypeNetworkInfo,
+	}
+
+	// Filter metric types if specified
+	if *metricTypes != "" {
+		requestedTypes := strings.Split(*metricTypes, ",")
+		var filteredTypes []performance.MetricType
+		for _, requested := range requestedTypes {
+			requested = strings.TrimSpace(requested)
+			for _, available := range availableTypes {
+				if string(available) == requested {
+					filteredTypes = append(filteredTypes, available)
+					break
+				}
+			}
+		}
+		availableTypes = filteredTypes
+	}
+
+	// Setup signal handling
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Collection ticker
+	ticker := time.NewTicker(*interval)
+	defer ticker.Stop()
+
+	fmt.Printf("Starting collector test (interval: %v)\n", *interval)
+	fmt.Printf("Testing metric types: %v\n", availableTypes)
+	fmt.Printf("Using paths: proc=%s, sys=%s, dev=%s\n", config.HostProcPath, config.HostSysPath, config.HostDevPath)
+	fmt.Printf("Press Ctrl+C to stop\n\n")
+
+	for {
+		select {
+		case <-ticker.C:
+			collectAndPrintTest(availableTypes, config, logger, *prettyPrint)
+		case <-sigChan:
+			fmt.Println("\nStopping collector test...")
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func collectAndPrintTest(metricTypes []performance.MetricType, config performance.CollectionConfig, logger logr.Logger, prettyPrint bool) {
+	fmt.Printf("=== Collection at %s ===\n", time.Now().Format(time.RFC3339))
+
+	for _, metricType := range metricTypes {
+		fmt.Printf("\n--- %s ---\n", metricType)
+
+		// Get collector factory from registry
+		factory, err := performance.GetCollector(metricType)
+		if err != nil {
+			fmt.Printf("Error getting collector: %v\n", err)
+			continue
+		}
+
+		// Create collector instance
+		collector, err := factory(logger, config)
+		if err != nil {
+			fmt.Printf("Error creating collector: %v\n", err)
+			continue
+		}
+
+		// Start the collector and get one data point
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		dataChan, err := collector.Start(ctx)
+		if err != nil {
+			fmt.Printf("Error starting collector: %v\n", err)
+			cancel()
+			continue
+		}
+
+		// Get first data point with timeout
+		select {
+		case data := <-dataChan:
+			if data != nil {
+				var output []byte
+				var marshalErr error
+
+				if prettyPrint {
+					output, marshalErr = json.MarshalIndent(data, "", "  ")
+				} else {
+					output, marshalErr = json.Marshal(data)
+				}
+
+				if marshalErr != nil {
+					fmt.Printf("Error marshaling data: %v\n", marshalErr)
+				} else {
+					fmt.Printf("%s\n", output)
+				}
+			} else {
+				fmt.Printf("No data received\n")
+			}
+		case <-time.After(5 * time.Second):
+			fmt.Printf("Timeout waiting for data\n")
+		}
+
+		// Stop the collector
+		collector.Stop()
+		cancel()
+	}
+
+	fmt.Printf("\n%s\n\n", strings.Repeat("=", 50))
+}
+
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
 }
