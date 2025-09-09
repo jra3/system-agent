@@ -64,7 +64,7 @@ jobs:
       id: clang-fmt
       run: |
         echo "Running clang formatter..."
-        make fmt.clang
+        make fmt.clang || true
         
         # Check if there are any changes after both formatters
         if [ -n "$(git status --porcelain)" ]; then
@@ -94,7 +94,7 @@ jobs:
 
         Applied automatic code formatting:
         - Go formatting via 'make fmt.go'
-        - C/C++ formatting via 'make fmt.clang'
+        - C/C++ formatting via 'make fmt.clang || true'
         
         [skip ci]" || exit 0
         
@@ -114,7 +114,7 @@ jobs:
           
           I've automatically formatted the code in this PR using:
           - \`make fmt.go\` for Go files
-          - \`make fmt.clang\` for C/C++ files
+          - \`make fmt.clang || true\` for C/C++ files
           
           The changes have been pushed to your branch. Please pull the latest changes locally:
           \`\`\`bash
