@@ -1,8 +1,9 @@
 package testing
 
-func   BadFormat(  ){
-println("test")
+func BadFormat() {
+	println("test")
 }
 
-type   BadType struct{
-Field string}
+type BadType struct {
+	Field string
+}
